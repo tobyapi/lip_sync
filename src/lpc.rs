@@ -110,7 +110,8 @@ pub fn lpc_to_cepstrum(alpha: &[f32], err: f32, num_coeffs: usize) -> Vec<f32> {
     for m in 1..num_coeffs {
         let mut sum = 0.0;
         for k in 1..m {
-            if k < a.len() { // Ensure k is within bounds for a
+            if k < a.len() {
+                // Ensure k is within bounds for a
                 sum += a[k] * c[m - k];
             }
         }
@@ -135,24 +136,21 @@ pub fn lpc_to_cepstrum(alpha: &[f32], err: f32, num_coeffs: usize) -> Vec<f32> {
 ///
 /// # Returns
 /// * `Vec<f32>` - 計算されたスペクトル包絡（対数マグニチュード）。
-pub fn lpc_to_spectral_envelope(
-    alpha: &[f32],
-    gain: f32,
-    fft_size: usize,
-) -> Vec<f32> {
+pub fn lpc_to_spectral_envelope(alpha: &[f32], gain: f32, fft_size: usize) -> Vec<f32> {
     let mut a = vec![0.0; fft_size];
     a[0..alpha.len()].copy_from_slice(alpha);
 
     let mut planner = FftPlanner::new();
     let fft = planner.plan_fft_forward(fft_size);
 
-    let mut buffer: Vec<Complex<f32>> = a
-        .iter()
-        .map(|&x| Complex { re: x, im: 0.0 })
-        .collect();
+    let mut buffer: Vec<Complex<f32>> = a.iter().map(|&x| Complex { re: x, im: 0.0 }).collect();
     fft.process(&mut buffer);
 
-    let log_gain = if gain > 0.0 { gain.ln() } else { f32::NEG_INFINITY };
+    let log_gain = if gain > 0.0 {
+        gain.ln()
+    } else {
+        f32::NEG_INFINITY
+    };
 
     buffer
         .iter()
@@ -245,7 +243,7 @@ mod tests {
 
         // --- 4. Execute cepstrum extraction ---
         let mut acf = autocorrelate(&signal_chunk);
-        
+
         let acf0 = acf[0];
         if acf0 > 0.0 {
             for val in &mut acf {
@@ -265,12 +263,11 @@ mod tests {
             // Basic assertion to check if cepstrum was calculated
             assert!(!cepstrum.is_empty());
             assert_ne!(cepstrum[0], 0.0);
-
         } else {
             panic!("Levinson-Durbin algorithm failed");
         }
     }
-    
+
     #[test]
     fn test_autocorrelate_simple() {
         let signal = [1.0, 2.0, 3.0];
@@ -322,11 +319,11 @@ mod tests {
         let a1 = 0.5;
         let a2 = -0.25;
         let c1 = -a1; // -0.5
-        let c2 = -a2 + a1*a1; // 0.25 + 0.25 = 0.5
+        let c2 = -a2 + a1 * a1; // 0.25 + 0.25 = 0.5
         let cepstrum = vec![0.0, c1, c2];
         let lpc_order = 2;
         let lpc = cepstrum_to_lpc(&cepstrum, lpc_order);
-        
+
         let expected_lpc = vec![1.0, a1, a2];
 
         assert_eq!(lpc.len(), expected_lpc.len());
@@ -362,7 +359,12 @@ mod tests {
         // Compare
         assert_eq!(original_lpc.len(), reconstructed_lpc.len());
         for (orig, recon) in original_lpc.iter().zip(reconstructed_lpc.iter()) {
-            assert!((orig - recon).abs() < 1e-4, "Mismatch: {} vs {}", orig, recon);
+            assert!(
+                (orig - recon).abs() < 1e-4,
+                "Mismatch: {} vs {}",
+                orig,
+                recon
+            );
         }
     }
 }

@@ -26,11 +26,7 @@ pub struct Formant {
 ///
 /// # Returns
 /// * `Vec<Formant>` - 検出されたフォルマントのベクトル。周波数と振幅の情報を含みます。
-pub fn find_formants(
-    spectrum: &[f32],
-    sample_rate: u32,
-    max_formants: usize,
-) -> Vec<Formant> {
+pub fn find_formants(spectrum: &[f32], sample_rate: u32, max_formants: usize) -> Vec<Formant> {
     let mut formants = Vec::new();
     let fft_size = spectrum.len();
 
@@ -145,7 +141,7 @@ pub fn recognize_vowel_from_pcm(pcm_data: &[f32], sample_rate: u32) -> Option<Vo
 
     if let Some((alpha, err)) = lpc::levinson_durbin(&acf, order) {
         let gain = err * acf0;
-        
+
         let spectral_envelope = lpc::lpc_to_spectral_envelope(&alpha, gain, fft_size);
         let formants = find_formants(&spectral_envelope, sample_rate, 5);
 

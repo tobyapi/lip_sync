@@ -1,47 +1,22 @@
 pub mod lpc;
 pub mod vowel;
 
-use crate::vowel::{recognize_vowel_from_pcm, Vowel};
+use crate::vowel::{Vowel, recognize_vowel_from_pcm};
 use libc::size_t;
 use std::slice;
 
 #[unsafe(no_mangle)]
-pub extern "C" fn hoge() -> i32 {
-    100
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn hoge2(pcm_data: *const f32, len: size_t) -> f32 {
-    let numbers = unsafe {
-        assert!(!pcm_data.is_null());
-        slice::from_raw_parts(pcm_data, len as usize)
-    };
-
-    numbers
-        .iter()
-        .sum()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn hoge3(out: *mut Vowel) -> bool {
-    let result = Some(Vowel::U);
-    if let Some(vowel) = result {
-        unsafe {
-            *out = vowel;
-        }
-        true
-    } else {
-        false
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn recognize_vowel(pcm: *const f32, len: size_t, sample_rate: u32, result: *mut Vowel) -> bool {
-    let pcm_data = unsafe {
-        slice::from_raw_parts(pcm, len as usize)
-    };
+pub extern "C" fn recognize_vowel(
+    pcm: *const f32,
+    len: size_t,
+    sample_rate: u32,
+    result: *mut Vowel,
+) -> bool {
+    let pcm_data = unsafe { slice::from_raw_parts(pcm, len as usize) };
     if let Some(vowel) = recognize_vowel_from_pcm(pcm_data, sample_rate) {
-        unsafe { *result = vowel; }
+        unsafe {
+            *result = vowel;
+        }
         true
     } else {
         false
@@ -84,8 +59,9 @@ mod tests {
 
             if let Some((alpha, err)) = crate::lpc::levinson_durbin(&acf, order) {
                 let gain = err * acf0;
-                
-                let spectral_envelope = crate::lpc::lpc_to_spectral_envelope(&alpha, gain, fft_size);
+
+                let spectral_envelope =
+                    crate::lpc::lpc_to_spectral_envelope(&alpha, gain, fft_size);
                 let formants = crate::vowel::find_formants(&spectral_envelope, sample_rate, 5);
 
                 if !formants.is_empty() {
