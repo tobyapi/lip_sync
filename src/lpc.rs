@@ -110,7 +110,9 @@ pub fn lpc_to_cepstrum(alpha: &[f32], err: f32, num_coeffs: usize) -> Vec<f32> {
     for m in 1..num_coeffs {
         let mut sum = 0.0;
         for k in 1..m {
-            sum += a[k] * c[m - k];
+            if k < a.len() { // Ensure k is within bounds for a
+                sum += a[k] * c[m - k];
+            }
         }
         if m <= p {
             c[m] = -a[m] - sum;
@@ -188,25 +190,179 @@ pub fn cepstrum_to_lpc(cepstrum: &[f32], lpc_order: usize) -> Vec<f32> {
     let mut a = vec![0.0; lpc_order + 1];
     a[0] = 1.0; // a[0] is always 1.0 for LPC coefficients
 
-    // The cepstrum coefficients are c[1]...c[lpc_order] for the direct conversion.
-    // c[0] is related to the gain, not directly used in a[m] calculation for m > 0.
-
     for m in 1..=lpc_order {
         let mut sum = 0.0;
         for k in 1..m {
-            // a_m = -c_m - sum_{k=1}^{m-1} (k/m) * a_k * c_{m-k}
-            // Ensure indices are within bounds for cepstrum and a
-            if k < a.len() && (m - k) < cepstrum.len() {
-                sum += (k as f32 / m as f32) * a[k] * cepstrum[m - k];
-            }
+            sum += a[k] * cepstrum[m - k];
         }
         if m < cepstrum.len() {
             a[m] = -cepstrum[m] - sum;
         } else {
-            // If m is beyond the available cepstrum coefficients (due to liftering),
-            // assume c_m is 0.
             a[m] = -sum;
         }
     }
     a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hound::WavReader;
+
+    #[test]
+    fn test_lpc_chain() {
+        // This is an integration test for the LPC analysis chain.
+        // It's based on the test_cepstrum from lib.rs.
+
+        // --- 1. Read audio file ---
+        let mut reader = WavReader::open("testdata/test.wav").unwrap();
+        let samples: Vec<f32> = reader
+            .samples::<i16>()
+            .map(|s| s.unwrap() as f32 / i16::MAX as f32)
+            .collect();
+
+        // --- 2. Select analysis frame ---
+        let order = 24;
+        let chunk_size = 1024;
+
+        let num_chunks = samples.len() / chunk_size;
+        let mut best_chunk_start = 0;
+        let mut max_energy = 0.0;
+        for i in 0..num_chunks {
+            let start = i * chunk_size;
+            let end = start + chunk_size;
+            let energy = samples[start..end].iter().map(|&s| s * s).sum();
+            if energy > max_energy {
+                max_energy = energy;
+                best_chunk_start = start;
+            }
+        }
+
+        let mut signal_chunk = samples[best_chunk_start..best_chunk_start + chunk_size].to_vec();
+
+        // --- 3. Pre-process for LPC analysis ---
+        hamming_window(&mut signal_chunk);
+
+        // --- 4. Execute cepstrum extraction ---
+        let mut acf = autocorrelate(&signal_chunk);
+        
+        let acf0 = acf[0];
+        if acf0 > 0.0 {
+            for val in &mut acf {
+                *val /= acf0;
+            }
+        }
+
+        if let Some((alpha, err)) = levinson_durbin(&acf, order) {
+            let gain = err * acf0;
+            let cepstrum = lpc_to_cepstrum(&alpha, gain, order + 1);
+
+            // --- 5. Display results ---
+            println!("Cepstrum Coefficients (first 5):");
+            for (i, &c) in cepstrum.iter().take(5).enumerate() {
+                println!("  c[{}]: {}", i, c);
+            }
+            // Basic assertion to check if cepstrum was calculated
+            assert!(!cepstrum.is_empty());
+            assert_ne!(cepstrum[0], 0.0);
+
+        } else {
+            panic!("Levinson-Durbin algorithm failed");
+        }
+    }
+    
+    #[test]
+    fn test_autocorrelate_simple() {
+        let signal = [1.0, 2.0, 3.0];
+        let acf = autocorrelate(&signal);
+        let expected = vec![14.0, 8.0, 3.0];
+        assert_eq!(acf.len(), expected.len());
+        for (a, b) in acf.iter().zip(expected.iter()) {
+            assert!((a - b).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_hamming_window_simple() {
+        let mut signal = vec![1.0; 3];
+        hamming_window(&mut signal);
+        let expected = vec![0.08, 1.0, 0.08];
+        assert_eq!(signal.len(), expected.len());
+        for (a, b) in signal.iter().zip(expected.iter()) {
+            assert!((a - b).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_lifter_cepstrum() {
+        let cepstrum = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let liftered = lifter_cepstrum(cepstrum, 3);
+        assert_eq!(liftered, vec![1.0, 2.0, 3.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_cepstrum_to_lpc_zeros() {
+        let lpc_order = 10;
+        let cepstrum = vec![0.0; lpc_order + 1]; // c[0] is log gain, others are 0
+        let lpc = cepstrum_to_lpc(&cepstrum, lpc_order);
+
+        let mut expected_lpc = vec![0.0; lpc_order + 1];
+        expected_lpc[0] = 1.0;
+
+        assert_eq!(lpc.len(), expected_lpc.len());
+        for (a, b) in lpc.iter().zip(expected_lpc.iter()) {
+            assert!((a - b).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_cepstrum_to_lpc_known_value() {
+        // c = [0, -a1, -a2 + a1^2]
+        // a = [1, a1, a2]
+        let a1 = 0.5;
+        let a2 = -0.25;
+        let c1 = -a1; // -0.5
+        let c2 = -a2 + a1*a1; // 0.25 + 0.25 = 0.5
+        let cepstrum = vec![0.0, c1, c2];
+        let lpc_order = 2;
+        let lpc = cepstrum_to_lpc(&cepstrum, lpc_order);
+        
+        let expected_lpc = vec![1.0, a1, a2];
+
+        assert_eq!(lpc.len(), expected_lpc.len());
+        for (a, b) in lpc.iter().zip(expected_lpc.iter()) {
+            assert!((a - b).abs() < 1e-6, "Mismatch: {} vs {}", a, b);
+        }
+    }
+
+    #[test]
+    fn test_cepstrum_lpc_roundtrip() {
+        let lpc_order = 12;
+        // Generate some plausible random LPC coefficients
+        let original_lpc: Vec<f32> = (0..=lpc_order)
+            .map(|i| {
+                if i == 0 {
+                    1.0
+                } else {
+                    // small random values
+                    (rand::random::<f32>() - 0.5) * 0.5
+                }
+            })
+            .collect();
+
+        let err_gain = 1.0; // Assume unity gain for simplicity
+        let num_coeffs = lpc_order + 1;
+
+        // LPC -> Cepstrum
+        let cepstrum = lpc_to_cepstrum(&original_lpc, err_gain, num_coeffs);
+
+        // Cepstrum -> LPC
+        let reconstructed_lpc = cepstrum_to_lpc(&cepstrum, lpc_order);
+
+        // Compare
+        assert_eq!(original_lpc.len(), reconstructed_lpc.len());
+        for (orig, recon) in original_lpc.iter().zip(reconstructed_lpc.iter()) {
+            assert!((orig - recon).abs() < 1e-4, "Mismatch: {} vs {}", orig, recon);
+        }
+    }
 }

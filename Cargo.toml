@@ -12,6 +12,7 @@ num-complex = "0.4.6"
 
 [dev-dependencies]
 hound = "3.5.1"
+rand = "0.9.1"
 
 [lib]
 name = "lip_sync"
