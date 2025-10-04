@@ -70,7 +70,7 @@ mod tests {
                         println!("  {:.1} Hz (Magnitude: {:.2})", f.frequency, f.magnitude);
                     }
 
-                    if let Some(vowel) = crate::vowel::recognize_vowel(&formants) {
+                    if let Some(vowel) = crate::vowel::find_vowel(&formants) {
                         println!("Recognized vowel: {:?}", vowel);
                     } else {
                         println!("Could not recognize vowel.");
@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn test_recognize_vowel_from_pcm() {
-        // 1. Read audio file
+        // 1. 音声ファイルを読み込みます
         let mut reader = WavReader::open("testdata/test.wav").unwrap();
         let samples: Vec<f32> = reader
             .samples::<i16>()
@@ -94,10 +94,9 @@ mod tests {
             .collect();
         let sample_rate = reader.spec().sample_rate;
 
-        // 2. Select a chunk of audio data
-        // Find the chunk with the highest energy to get a stable result
-        //let chunk_size = 1024;
-        let chunk_size = 4096;
+        // 2. 音声データのチャンクを選択します
+        // 安定した結果を得るために最もエネルギーの高いチャンクを見つけます
+        let chunk_size = 1024;
         let num_chunks = samples.len() / chunk_size;
         let mut best_chunk_start = 0;
         let mut max_energy = 0.0;
@@ -112,10 +111,10 @@ mod tests {
         }
         let pcm_chunk = &samples[best_chunk_start..best_chunk_start + chunk_size];
 
-        // 3. Call the new function to recognize the vowel
+        // 3. 新しい関数を呼び出して母音を認識します
         let vowel = crate::vowel::recognize_vowel_from_pcm(pcm_chunk, sample_rate);
 
-        // 4. Print the result
+        // 4. 結果を表示します
         println!("--- Test recognize_vowel_from_pcm ---");
         println!("Sample rate: {}", sample_rate);
         println!("Chunk size: {}", pcm_chunk.len());
@@ -124,7 +123,7 @@ mod tests {
         } else {
             println!("Could not recognize vowel.");
         }
-        // Add an assertion to make it a real test
+        // これを実際のテストにするためにアサーションを追加します
         assert!(vowel.is_some());
     }
 }

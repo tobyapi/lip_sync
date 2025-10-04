@@ -110,8 +110,7 @@ pub fn lpc_to_cepstrum(alpha: &[f32], err: f32, num_coeffs: usize) -> Vec<f32> {
     for m in 1..num_coeffs {
         let mut sum = 0.0;
         for k in 1..m {
-            if k < a.len() {
-                // Ensure k is within bounds for a
+            if k < a.len() { // aの範囲内であることを確認
                 sum += a[k] * c[m - k];
             }
         }
@@ -186,7 +185,7 @@ pub fn lifter_cepstrum(mut cepstrum: Vec<f32>, lifter_length: usize) -> Vec<f32>
 /// * `Vec<f32>` - 再構築されたLPC係数のベクトル (a[0]は1.0)。
 pub fn cepstrum_to_lpc(cepstrum: &[f32], lpc_order: usize) -> Vec<f32> {
     let mut a = vec![0.0; lpc_order + 1];
-    a[0] = 1.0; // a[0] is always 1.0 for LPC coefficients
+    a[0] = 1.0; // LPC係数a[0]は常に1.0です
 
     for m in 1..=lpc_order {
         let mut sum = 0.0;
@@ -209,17 +208,14 @@ mod tests {
 
     #[test]
     fn test_lpc_chain() {
-        // This is an integration test for the LPC analysis chain.
-        // It's based on the test_cepstrum from lib.rs.
-
-        // --- 1. Read audio file ---
+        // --- 1. 音声ファイルの読み込み ---
         let mut reader = WavReader::open("testdata/test.wav").unwrap();
         let samples: Vec<f32> = reader
             .samples::<i16>()
             .map(|s| s.unwrap() as f32 / i16::MAX as f32)
             .collect();
 
-        // --- 2. Select analysis frame ---
+        // --- 2. 分析フレームの選択 ---
         let order = 24;
         let chunk_size = 1024;
 
@@ -238,10 +234,10 @@ mod tests {
 
         let mut signal_chunk = samples[best_chunk_start..best_chunk_start + chunk_size].to_vec();
 
-        // --- 3. Pre-process for LPC analysis ---
+        // --- 3. LPC分析の前処理 ---
         hamming_window(&mut signal_chunk);
 
-        // --- 4. Execute cepstrum extraction ---
+        // --- 4. ケプストラム抽出の実行 ---
         let mut acf = autocorrelate(&signal_chunk);
 
         let acf0 = acf[0];
@@ -255,12 +251,12 @@ mod tests {
             let gain = err * acf0;
             let cepstrum = lpc_to_cepstrum(&alpha, gain, order + 1);
 
-            // --- 5. Display results ---
+            // --- 5. 結果の表示 ---
             println!("Cepstrum Coefficients (first 5):");
             for (i, &c) in cepstrum.iter().take(5).enumerate() {
                 println!("  c[{}]: {}", i, c);
             }
-            // Basic assertion to check if cepstrum was calculated
+            // ケプストラムが計算されたことを確認するための基本的なアサーション
             assert!(!cepstrum.is_empty());
             assert_ne!(cepstrum[0], 0.0);
         } else {
@@ -300,7 +296,7 @@ mod tests {
     #[test]
     fn test_cepstrum_to_lpc_zeros() {
         let lpc_order = 10;
-        let cepstrum = vec![0.0; lpc_order + 1]; // c[0] is log gain, others are 0
+        let cepstrum = vec![0.0; lpc_order + 1]; // c[0]は対数ゲイン、他は0
         let lpc = cepstrum_to_lpc(&cepstrum, lpc_order);
 
         let mut expected_lpc = vec![0.0; lpc_order + 1];
@@ -335,28 +331,22 @@ mod tests {
     #[test]
     fn test_cepstrum_lpc_roundtrip() {
         let lpc_order = 12;
-        // Generate some plausible random LPC coefficients
+        // もっともらしいランダムなLPC係数を生成
         let original_lpc: Vec<f32> = (0..=lpc_order)
             .map(|i| {
                 if i == 0 {
                     1.0
                 } else {
-                    // small random values
                     (rand::random::<f32>() - 0.5) * 0.5
                 }
             })
             .collect();
 
-        let err_gain = 1.0; // Assume unity gain for simplicity
+        let err_gain = 1.0; // 簡単のため、ゲインを1と仮定
         let num_coeffs = lpc_order + 1;
-
-        // LPC -> Cepstrum
         let cepstrum = lpc_to_cepstrum(&original_lpc, err_gain, num_coeffs);
-
-        // Cepstrum -> LPC
         let reconstructed_lpc = cepstrum_to_lpc(&cepstrum, lpc_order);
 
-        // Compare
         assert_eq!(original_lpc.len(), reconstructed_lpc.len());
         for (orig, recon) in original_lpc.iter().zip(reconstructed_lpc.iter()) {
             assert!(
