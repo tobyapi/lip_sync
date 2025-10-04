@@ -1,0 +1,18 @@
+[package]
+name = "lip_sync"
+version = "0.1.0"
+edition = "2024"
+
+
+[dependencies]
+libc = "0.2"
+rustfft = "6.4.1"
+num-complex = "0.4.6"
+
+
+[dev-dependencies]
+hound = "3.5.1"
+
+[lib]
+name = "lip_sync"
+crate-type = ["cdylib"]
