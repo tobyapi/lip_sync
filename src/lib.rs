@@ -1,17 +1,18 @@
 pub mod fft;
-pub mod cepstrum;
+pub mod lpc;
+pub mod vowel;
 
-use crate::cepstrum::*;
+use crate::vowel::{recognize_vowel_from_pcm, Vowel};
 use libc::size_t;
 use std::slice;
 
 #[unsafe(no_mangle)]
-pub extern fn hoge() -> i32 {
+pub extern "C" fn hoge() -> i32 {
     100
 }
 
 #[unsafe(no_mangle)]
-pub fn hoge2(pcm_data: *const f32, len: size_t) -> f32 {
+pub extern "C" fn hoge2(pcm_data: *const f32, len: size_t) -> f32 {
     let numbers = unsafe {
         assert!(!pcm_data.is_null());
         slice::from_raw_parts(pcm_data, len as usize)
@@ -23,8 +24,8 @@ pub fn hoge2(pcm_data: *const f32, len: size_t) -> f32 {
 }
 
 #[unsafe(no_mangle)]
-pub fn hoge3(out: *mut cepstrum::Vowel) -> bool {
-    let result = Some(cepstrum::Vowel::U);
+pub extern "C" fn hoge3(out: *mut Vowel) -> bool {
+    let result = Some(Vowel::U);
     if let Some(vowel) = result {
         unsafe {
             *out = vowel;
@@ -36,7 +37,7 @@ pub fn hoge3(out: *mut cepstrum::Vowel) -> bool {
 }
 
 #[unsafe(no_mangle)]
-pub fn recognize_vowel(pcm: *const f32, len: size_t, sample_rate: u32, result: *mut Vowel) -> bool {
+pub extern "C" fn recognize_vowel(pcm: *const f32, len: size_t, sample_rate: u32, result: *mut Vowel) -> bool {
     let pcm_data = unsafe {
         slice::from_raw_parts(pcm, len as usize)
     };
@@ -104,11 +105,11 @@ mod tests {
 
         // --- 3. LPC分析の前処理 ---
         // ハミング窓を適用して、フレームの端の影響を抑えます。
-        crate::cepstrum::hamming_window(&mut signal_chunk);
+        crate::lpc::hamming_window(&mut signal_chunk);
 
         // --- 4. ケプストラム抽出の実行 ---
         // まず、自己相関を計算します。
-        let mut acf = crate::cepstrum::autocorrelate(&signal_chunk);
+        let mut acf = crate::lpc::autocorrelate(&signal_chunk);
         
         // 自己相関を正規化します。これにより、レビンソン・ダービン法の計算が安定します。
         let acf0 = acf[0];
@@ -119,11 +120,11 @@ mod tests {
         }
 
         // レビンソン・ダービン法でLPC係数（alpha）と正規化された予測誤差（err）を求めます。
-        if let Some((alpha, err)) = crate::cepstrum::levinson_durbin(&acf, order) {
+        if let Some((alpha, err)) = crate::lpc::levinson_durbin(&acf, order) {
             // 実際の予測誤差ゲインを計算します。
             let gain = err * acf0;
             // LPC係数からケプストラム係数を計算します。
-            let cepstrum = crate::cepstrum::lpc_to_cepstrum(&alpha, gain, order + 1);
+            let cepstrum = crate::lpc::lpc_to_cepstrum(&alpha, gain, order + 1);
 
             // --- 5. 結果の表示 ---
             println!("Cepstrum Coefficients (first 5):");
@@ -155,9 +156,9 @@ mod tests {
             }
             println!("--- Chunk {} ---", i);
             let mut signal_chunk = chunk.to_vec();
-            crate::cepstrum::hamming_window(&mut signal_chunk);
+            crate::lpc::hamming_window(&mut signal_chunk);
 
-            let mut acf = crate::cepstrum::autocorrelate(&signal_chunk);
+            let mut acf = crate::lpc::autocorrelate(&signal_chunk);
             let acf0 = acf[0];
             if acf0 > 0.0 {
                 for val in &mut acf {
@@ -165,11 +166,11 @@ mod tests {
                 }
             }
 
-            if let Some((alpha, err)) = crate::cepstrum::levinson_durbin(&acf, order) {
+            if let Some((alpha, err)) = crate::lpc::levinson_durbin(&acf, order) {
                 let gain = err * acf0;
                 
-                let spectral_envelope = crate::cepstrum::lpc_to_spectral_envelope(&alpha, gain, fft_size);
-                let formants = crate::cepstrum::find_formants(&spectral_envelope, sample_rate, 5);
+                let spectral_envelope = crate::lpc::lpc_to_spectral_envelope(&alpha, gain, fft_size);
+                let formants = crate::vowel::find_formants(&spectral_envelope, sample_rate, 5);
 
                 if !formants.is_empty() {
                     println!("Detected formants:");
@@ -177,7 +178,7 @@ mod tests {
                         println!("  {:.1} Hz (Magnitude: {:.2})", f.frequency, f.magnitude);
                     }
 
-                    if let Some(vowel) = crate::cepstrum::recognize_vowel(&formants) {
+                    if let Some(vowel) = crate::vowel::recognize_vowel(&formants) {
                         println!("Recognized vowel: {:?}", vowel);
                     } else {
                         println!("Could not recognize vowel.");
@@ -220,7 +221,7 @@ mod tests {
         let pcm_chunk = &samples[best_chunk_start..best_chunk_start + chunk_size];
 
         // 3. Call the new function to recognize the vowel
-        let vowel = crate::cepstrum::recognize_vowel_from_pcm(pcm_chunk, sample_rate);
+        let vowel = crate::vowel::recognize_vowel_from_pcm(pcm_chunk, sample_rate);
 
         // 4. Print the result
         println!("--- Test recognize_vowel_from_pcm ---");
