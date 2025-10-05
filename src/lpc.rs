@@ -1,16 +1,16 @@
 use num_complex::Complex;
 use rustfft::FftPlanner;
 
-/// 音声信号の自己相関を計算します。
+/// Computes the autocorrelation of an audio signal.
 ///
-/// 自己相関は、信号が時間的にどれだけ自分自身に似ているかを示す尺度です。
-/// LPC（線形予測符号化）分析の最初のステップとして、この計算が必要になります。
+/// Autocorrelation is a measure of how similar a signal is to a delayed copy of itself as a function of delay.
+/// This calculation is required as the first step in LPC (Linear Predictive Coding) analysis.
 ///
 /// # Arguments
-/// * `signal` - 入力となる音声信号のスライス。値はf32型で正規化されていることが望ましいです。
+/// * `signal` - A slice of the input audio signal. The values should preferably be normalized f32.
 ///
 /// # Returns
-/// * `Vec<f32>` - 計算された自己相関値のベクトル。
+/// * `Vec<f32>` - A vector of the calculated autocorrelation values.
 pub fn autocorrelate(signal: &[f32]) -> Vec<f32> {
     let n = signal.len();
     let mut acf = vec![0.0; n];
@@ -22,13 +22,13 @@ pub fn autocorrelate(signal: &[f32]) -> Vec<f32> {
     acf
 }
 
-/// 信号にハミング窓を適用します。
+/// Applies a Hamming window to the signal.
 ///
-/// 窓関数は、信号の短いフレームを切り出す際に、その両端が不連続になること（スペクトル漏れ）を防ぐために使います。
-/// ハミング窓は、音声分析で非常によく使われる窓関数の一つです。
+/// A window function is used to prevent spectral leakage when cutting out a short frame of a signal.
+/// The Hamming window is one of the most commonly used window functions in audio analysis.
 ///
 /// # Arguments
-/// * `signal` - 窓を適用する信号のスライス。この関数は信号を直接変更します。
+/// * `signal` - A slice of the signal to apply the window to. This function modifies the signal directly.
 pub fn hamming_window(signal: &mut [f32]) {
     let n = signal.len();
     for i in 0..n {
@@ -36,18 +36,18 @@ pub fn hamming_window(signal: &mut [f32]) {
     }
 }
 
-/// レビンソン・ダービン法を用いて、自己相関値からLPC係数を計算します。
+/// Calculates LPC coefficients from autocorrelation values using the Levinson-Durbin algorithm.
 ///
-/// このアルゴリズムは、効率的にLPC係数（alpha）と予測誤差（err）を求めることができます。
-/// LPC係数は、ある時点の音声サンプルが、それ以前のサンプルからどのように予測できるかを示します。
+/// This algorithm can efficiently find the LPC coefficients (alpha) and the prediction error (err).
+/// The LPC coefficients indicate how a sample at a certain point in time can be predicted from previous samples.
 ///
 /// # Arguments
-/// * `acf` - 自己相関値のベクトル。`acf[0]`は信号のエネルギーに相当します。正規化されていることが望ましいです。
-/// * `order` - LPC分析の次数。どれだけ過去のサンプルを予測に使うかを決めます。
+/// * `acf` - A vector of autocorrelation values. `acf[0]` corresponds to the signal's energy. It is preferably normalized.
+/// * `order` - The order of the LPC analysis. It determines how many past samples are used for prediction.
 ///
 /// # Returns
-/// * `Option<(Vec<f32>, f32)>` - 計算が成功した場合、LPC係数（alpha）のベクトルと最終的な予測誤差（err）のタプルを返します。
-///   予測誤差が0になるなど、計算が不安定な場合は `None` を返します。
+/// * `Option<(Vec<f32>, f32)>` - If the calculation is successful, it returns a tuple containing a vector of LPC coefficients (alpha) and the final prediction error (err).
+///   Returns `None` if the calculation is unstable, such as when the prediction error becomes zero.
 pub fn levinson_durbin(acf: &[f32], order: usize) -> Option<(Vec<f32>, f32)> {
     if acf.is_empty() {
         return None;
@@ -81,18 +81,18 @@ pub fn levinson_durbin(acf: &[f32], order: usize) -> Option<(Vec<f32>, f32)> {
     Some((alpha, err))
 }
 
-/// LPC係数からケプストラム係数を計算します。
+/// Calculates cepstrum coefficients from LPC coefficients.
 ///
-/// ケプストラムは、音声のスペクトル包絡（声道の特性）を表現する特徴量です。
-/// この関数は、LPC係数から再帰的な計算式で直接ケプストラムに変換します。
+/// The cepstrum is a feature that represents the spectral envelope of the voice (characteristics of the vocal tract).
+/// This function directly converts LPC coefficients to cepstrum using a recursive formula.
 ///
 /// # Arguments
-/// * `alpha` - LPC係数のベクトル。`levinson_durbin`から得られたものです。
-/// * `err` - 予測誤差のゲイン。これも`levinson_durbin`から得られます。
-/// * `num_coeffs` - 計算するケプストラム係数の数。
+/// * `alpha` - A vector of LPC coefficients obtained from `levinson_durbin`.
+/// * `err` - The prediction error gain, also obtained from `levinson_durbin`.
+/// * `num_coeffs` - The number of cepstrum coefficients to calculate.
 ///
 /// # Returns
-/// * `Vec<f32>` - 計算されたケプストラム係数のベクトル。
+/// * `Vec<f32>` - A vector of the calculated cepstrum coefficients.
 pub fn lpc_to_cepstrum(alpha: &[f32], err: f32, num_coeffs: usize) -> Vec<f32> {
     let p = alpha.len() - 1;
     let mut c = vec![0.0; num_coeffs];
@@ -110,7 +110,7 @@ pub fn lpc_to_cepstrum(alpha: &[f32], err: f32, num_coeffs: usize) -> Vec<f32> {
     for m in 1..num_coeffs {
         let mut sum = 0.0;
         for k in 1..m {
-            if k < a.len() { // aの範囲内であることを確認
+            if k < a.len() { // Ensure k is within bounds for a
                 sum += a[k] * c[m - k];
             }
         }
@@ -124,17 +124,17 @@ pub fn lpc_to_cepstrum(alpha: &[f32], err: f32, num_coeffs: usize) -> Vec<f32> {
     c
 }
 
-/// LPC係数からスペクトル包絡を計算します。
+/// Calculates the spectral envelope from LPC coefficients.
 ///
-/// LPC係数のフーリエ変換の逆数をとることで、スペクトル包絡を計算します。
+/// The spectral envelope is calculated by taking the inverse Fourier transform of the LPC coefficients.
 ///
 /// # Arguments
-/// * `alpha` - LPC係数のベクトル。
-/// * `gain` - 予測誤差のゲイン。
-/// * `fft_size` - FFTのサイズ。
+/// * `alpha` - A vector of LPC coefficients.
+/// * `gain` - The prediction error gain.
+/// * `fft_size` - The size of the FFT.
 ///
 /// # Returns
-/// * `Vec<f32>` - 計算されたスペクトル包絡（対数マグニチュード）。
+/// * `Vec<f32>` - The calculated spectral envelope (log magnitude).
 pub fn lpc_to_spectral_envelope(alpha: &[f32], gain: f32, fft_size: usize) -> Vec<f32> {
     let mut a = vec![0.0; fft_size];
     a[0..alpha.len()].copy_from_slice(alpha);
@@ -157,17 +157,17 @@ pub fn lpc_to_spectral_envelope(alpha: &[f32], gain: f32, fft_size: usize) -> Ve
         .collect()
 }
 
-/// ケプストラム係数にリフタリングを適用します。
+/// Applies liftering to the cepstrum coefficients.
 ///
-/// 低域ケプストラム係数のみを保持し、高域ケプストラム係数をゼロにすることで、
-/// スペクトル包絡を平滑化し、音源情報（ピッチなど）を除去します。
+/// By keeping only the low-frequency cepstrum coefficients and zeroing out the high-frequency ones,
+/// the spectral envelope is smoothed, and source information (like pitch) is removed.
 ///
 /// # Arguments
-/// * `cepstrum` - ケプストラム係数のベクトル。
-/// * `lifter_length` - 保持する低域ケプストラム係数の数。
+/// * `cepstrum` - A vector of cepstrum coefficients.
+/// * `lifter_length` - The number of low-frequency cepstrum coefficients to keep.
 ///
 /// # Returns
-/// * `Vec<f32>` - リフタリングが適用されたケプストラム係数のベクトル。
+/// * `Vec<f32>` - A vector of the liftered cepstrum coefficients.
 pub fn lifter_cepstrum(mut cepstrum: Vec<f32>, lifter_length: usize) -> Vec<f32> {
     for i in lifter_length..cepstrum.len() {
         cepstrum[i] = 0.0;
@@ -175,17 +175,17 @@ pub fn lifter_cepstrum(mut cepstrum: Vec<f32>, lifter_length: usize) -> Vec<f32>
     cepstrum
 }
 
-/// リフタリングされたケプストラム係数からLPC係数を再構築します。
+/// Reconstructs LPC coefficients from liftered cepstrum coefficients.
 ///
 /// # Arguments
-/// * `cepstrum` - リフタリングが適用されたケプストラム係数のベクトル (c[0]はゲインの対数)。
-/// * `lpc_order` - 再構築するLPC係数の次数。
+/// * `cepstrum` - A vector of liftered cepstrum coefficients (c[0] is the log gain).
+/// * `lpc_order` - The order of the LPC coefficients to reconstruct.
 ///
 /// # Returns
-/// * `Vec<f32>` - 再構築されたLPC係数のベクトル (a[0]は1.0)。
+/// * `Vec<f32>` - A vector of the reconstructed LPC coefficients (a[0] is 1.0).
 pub fn cepstrum_to_lpc(cepstrum: &[f32], lpc_order: usize) -> Vec<f32> {
     let mut a = vec![0.0; lpc_order + 1];
-    a[0] = 1.0; // LPC係数a[0]は常に1.0です
+    a[0] = 1.0; // a[0] is always 1.0 for LPC coefficients
 
     for m in 1..=lpc_order {
         let mut sum = 0.0;
@@ -208,14 +208,17 @@ mod tests {
 
     #[test]
     fn test_lpc_chain() {
-        // --- 1. 音声ファイルの読み込み ---
+        // This is an integration test for the LPC analysis chain.
+        // It's based on the test_cepstrum from lib.rs.
+
+        // --- 1. Read audio file ---
         let mut reader = WavReader::open("testdata/test.wav").unwrap();
         let samples: Vec<f32> = reader
             .samples::<i16>()
             .map(|s| s.unwrap() as f32 / i16::MAX as f32)
             .collect();
 
-        // --- 2. 分析フレームの選択 ---
+        // --- 2. Select analysis frame ---
         let order = 24;
         let chunk_size = 1024;
 
@@ -234,10 +237,10 @@ mod tests {
 
         let mut signal_chunk = samples[best_chunk_start..best_chunk_start + chunk_size].to_vec();
 
-        // --- 3. LPC分析の前処理 ---
+        // --- 3. Pre-process for LPC analysis ---
         hamming_window(&mut signal_chunk);
 
-        // --- 4. ケプストラム抽出の実行 ---
+        // --- 4. Execute cepstrum extraction ---
         let mut acf = autocorrelate(&signal_chunk);
 
         let acf0 = acf[0];
@@ -251,12 +254,12 @@ mod tests {
             let gain = err * acf0;
             let cepstrum = lpc_to_cepstrum(&alpha, gain, order + 1);
 
-            // --- 5. 結果の表示 ---
+            // --- 5. Display results ---
             println!("Cepstrum Coefficients (first 5):");
             for (i, &c) in cepstrum.iter().take(5).enumerate() {
                 println!("  c[{}]: {}", i, c);
             }
-            // ケプストラムが計算されたことを確認するための基本的なアサーション
+            // Basic assertion to check if cepstrum was calculated
             assert!(!cepstrum.is_empty());
             assert_ne!(cepstrum[0], 0.0);
         } else {
@@ -296,7 +299,7 @@ mod tests {
     #[test]
     fn test_cepstrum_to_lpc_zeros() {
         let lpc_order = 10;
-        let cepstrum = vec![0.0; lpc_order + 1]; // c[0]は対数ゲイン、他は0
+        let cepstrum = vec![0.0; lpc_order + 1]; // c[0] is log gain, others are 0
         let lpc = cepstrum_to_lpc(&cepstrum, lpc_order);
 
         let mut expected_lpc = vec![0.0; lpc_order + 1];
@@ -331,22 +334,28 @@ mod tests {
     #[test]
     fn test_cepstrum_lpc_roundtrip() {
         let lpc_order = 12;
-        // もっともらしいランダムなLPC係数を生成
+        // Generate some plausible random LPC coefficients
         let original_lpc: Vec<f32> = (0..=lpc_order)
             .map(|i| {
                 if i == 0 {
                     1.0
                 } else {
+                    // small random values
                     (rand::random::<f32>() - 0.5) * 0.5
                 }
             })
             .collect();
 
-        let err_gain = 1.0; // 簡単のため、ゲインを1と仮定
+        let err_gain = 1.0; // Assume unity gain for simplicity
         let num_coeffs = lpc_order + 1;
+
+        // LPC -> Cepstrum
         let cepstrum = lpc_to_cepstrum(&original_lpc, err_gain, num_coeffs);
+
+        // Cepstrum -> LPC
         let reconstructed_lpc = cepstrum_to_lpc(&cepstrum, lpc_order);
 
+        // Compare
         assert_eq!(original_lpc.len(), reconstructed_lpc.len());
         for (orig, recon) in original_lpc.iter().zip(reconstructed_lpc.iter()) {
             assert!(
