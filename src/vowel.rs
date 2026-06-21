@@ -1,4 +1,4 @@
-use crate::{gmm, lpc};
+use crate::{features::FeatureExtractor, gmm, lpc};
 use num_complex::Complex;
 use rustfft::FftPlanner;
 
@@ -438,6 +438,7 @@ pub struct LipSyncAnalyzer {
     previous_jaw_open: f32,
     current_time_seconds: f32,
     timed_cues: Vec<LipSyncTimedCue>,
+    feature_extractor: FeatureExtractor,
 }
 
 impl LipSyncAnalyzer {
@@ -463,6 +464,7 @@ impl LipSyncAnalyzer {
             previous_jaw_open: 0.0,
             current_time_seconds: 0.0,
             timed_cues: Vec::new(),
+            feature_extractor: FeatureExtractor::new(),
         }
     }
 
@@ -489,7 +491,20 @@ impl LipSyncAnalyzer {
     }
 
     pub fn process_at_time(&mut self, pcm_data: &[f32], time_seconds: f32) -> LipSyncFrame {
-        let evidence = analyze_vowel_evidence_with_options(pcm_data, self.options);
+        let gmm_features = if self.options.gmm_enabled() {
+            Some(
+                self.feature_extractor
+                    .extract(pcm_data, self.options.sample_rate)
+                    .values,
+            )
+        } else {
+            None
+        };
+        let evidence = analyze_vowel_evidence_with_classifier_features(
+            pcm_data,
+            self.options,
+            gmm_features.as_deref(),
+        );
         let profile = analyze_spectral_profile(pcm_data, self.options);
         self.update_loudness_trackers(&profile);
 
@@ -681,6 +696,14 @@ pub fn analyze_vowel_evidence_with_options(
     pcm_data: &[f32],
     options: LipSyncOptions,
 ) -> VowelEvidence {
+    analyze_vowel_evidence_with_classifier_features(pcm_data, options, None)
+}
+
+fn analyze_vowel_evidence_with_classifier_features(
+    pcm_data: &[f32],
+    options: LipSyncOptions,
+    classifier_features: Option<&[f32]>,
+) -> VowelEvidence {
     let options = options.normalized();
     if pcm_data.is_empty() || options.sample_rate == 0 {
         return VowelEvidence::default();
@@ -698,7 +721,9 @@ pub fn analyze_vowel_evidence_with_options(
 
     let mut scores = match VowelClassifierKind::from_options(options) {
         VowelClassifierKind::MultiPrototype => multi_prototype_scores(&profile.normalized_bands),
-        VowelClassifierKind::DiagonalGmm => gmm_vowel_scores(&profile.normalized_bands),
+        VowelClassifierKind::DiagonalGmm => classifier_features
+            .map(gmm_vowel_scores)
+            .unwrap_or_else(|| gmm_vowel_scores(&profile.normalized_bands)),
     };
     if options.tiny_nn_enabled() {
         let nn_scores = tiny_nn_scores(&profile);
@@ -939,9 +964,9 @@ fn compensate_compressed_feature(
 
     normalize_feature(compensated)
 }
-fn gmm_vowel_scores(feature: &[f32; NUM_BANDS]) -> [f32; NUM_VOWELS] {
+fn gmm_vowel_scores(features: &[f32]) -> [f32; NUM_VOWELS] {
     let model = gmm::placeholder_vowel_gmm();
-    model.posterior::<NUM_VOWELS>(feature)
+    model.posterior::<NUM_VOWELS>(features)
 }
 
 fn multi_prototype_scores(feature: &[f32; NUM_BANDS]) -> [f32; NUM_VOWELS] {

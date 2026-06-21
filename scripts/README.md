@@ -42,4 +42,4 @@ python3 scripts/train_gmm.py \
   --out target/lipsync_eval/gmm.json
 ```
 
-This is a lightweight initializer/export path, not an accuracy guarantee. It needs real labeled feature data from the evaluator before replacing the placeholder model.
+This is a lightweight initializer/export path, not an accuracy guarantee. It needs real labeled feature data exported from the SDK feature extractor before replacing the placeholder model. Feature rows should include MFCC 1..12, delta MFCC, spectral stats, voicing, and f0 columns with the same order used by `FeatureVector.values`.

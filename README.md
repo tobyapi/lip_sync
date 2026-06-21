@@ -11,6 +11,7 @@ Implemented scope in this repository:
 - Singing mode smoothing for sustained notes and slower vowel transitions.
 - Loud voice / shouting / compressed-audio robustness through RMS normalization, soft limiting, clipping/crest detection, adaptive loudness tracking, and compressed-voice posterior priors.
 - Optional tiny NN blend over normalized spectral features.
+- MFCC/voicing feature extractor for GMM and tiny-classifier experiments.
 - TTS viseme metadata and lyric timing fusion through timed class cues.
 - Legacy single-vowel C ABI for compatibility.
 
@@ -124,6 +125,20 @@ python3 scripts/evaluate_dataset.py \
 
 The evaluator reads mono or stereo PCM WAV files, downmixes to mono, runs the C ABI with configurable chunks, and writes `frames.csv`, `summary.json`, and `confusion_matrix.csv`. The summary includes vowel top-1/top-2 accuracy, rest rejection, fricative and closed detection when labels exist, average jaw opening, class switches per second, and mean posterior entropy.
 
+## Feature Extractor
+
+The stateful analyzer owns a `FeatureExtractor` for richer classifier paths. It produces:
+
+- 24 mel-like log band energies internally.
+- MFCC 1..12, excluding MFCC 0 from vowel-shape classification.
+- Delta MFCC from the previous analyzer frame.
+- Spectral centroid and spectral tilt.
+- High-frequency ratio, zero crossing rate, and spectral flatness.
+- Simple voiced confidence.
+- Simple autocorrelation f0 estimate.
+- `rms_db` for loudness and jaw behavior.
+
+GMM mode consumes the richer `FeatureVector.values`. The fixed tiny NN still uses the legacy 16-band shape today, but the feature extractor is the intended input surface for future tiny-model training/export.
 ## Classifier Notes
 
 The default vowel evidence path is multi-prototype normalized spectral matching over 16 log-energy bands, optionally blended with a tiny NN. A diagonal GMM infrastructure path is available with `LIPSYNC_FLAG_GMM`, currently seeded from the same hand-written prototype family until trained data is available. Each vowel keeps the original hand-written prototype as a base and adds deterministic pitch, loudness, singing, and microphone-response variants. The placeholder GMM is infrastructure only; real accuracy claims should come from the evaluation workflow and a trained exported model. The classifier intentionally does not use F1/F2 polygon mapping. LPC/formants remain only as debug and auxiliary evidence. Compressed, clipped, and shouted voices use feature smoothing plus a weak broad vowel prior capped at 0.18 so mouth shape is preserved; compression mainly dampens confidence and stabilizes jaw opening instead of forcing an A-heavy distribution.
