@@ -192,7 +192,7 @@ mod tests {
         };
         assert!(lipsync_set_timed_cues(analyzer, &cue, 1));
 
-        let pcm = vec![0.02; 1024];
+        let pcm = vec![0.02; 2048];
         let mut frame = LipSyncFrame::default();
         assert!(lipsync_process_at_time(
             analyzer,

@@ -5,7 +5,7 @@ A profile-free, low-latency Rust lip-sync core with a C ABI and Unity binding so
 Implemented scope in this repository:
 
 - Profile-free spectral-envelope vowel evidence.
-- Low-latency 1024-sample frame analysis.
+- Low-latency ring-buffer analysis with time-based windows and arbitrary input chunk sizes.
 - C ABI suitable for native plugins and engine bindings.
 - Unity binding source under `bindings/unity`.
 - Singing mode temporal behavior for sustained notes, slower vowel-to-vowel transitions, and smoother jaw movement.
@@ -42,6 +42,9 @@ For Unity usage, copy the DLL to:
 Assets/Plugins/x86_64/lip_sync.dll
 ```
 
+## Streaming Windows
+
+`LipSyncAnalyzer::process` and the C ABI accept arbitrary PCM chunk sizes. Samples are appended to an internal ring buffer and analyzed with time-based windows: normal mode uses a 25 ms window and 10 ms hop, while singing mode uses a 40 ms window and 10 ms hop. If not enough samples have arrived yet, the analyzer returns the latest safe frame, initially REST. The internal FFT can still use `FRAME_SIZE`, but the input chunk no longer needs to be 1024 samples.
 ## Output Classes
 
 `LipSyncFrame.posterior` contains probabilities in this order:

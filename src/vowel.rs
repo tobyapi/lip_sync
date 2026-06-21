@@ -22,6 +22,9 @@ const SILENCE_RMS: f32 = 0.0005;
 const DEFAULT_METADATA_WEIGHT: f32 = 0.55;
 const DEFAULT_SMOOTHING: f32 = 0.18;
 const DEFAULT_LOUDNESS_ADAPTATION: f32 = 0.07;
+const NORMAL_WINDOW_MS: f32 = 25.0;
+const SINGING_WINDOW_MS: f32 = 40.0;
+const ANALYSIS_HOP_MS: f32 = 10.0;
 const COMPRESSED_VOWEL_PRIOR_MAX_WEIGHT: f32 = 0.18;
 
 const BANDS_HZ: [(f32, f32); NUM_BANDS] = [
@@ -450,6 +453,9 @@ pub struct LipSyncAnalyzer {
     hold_time_seconds: f32,
     previous_time_step_seconds: f32,
     last_switch_confidence: f32,
+    audio_ring: Vec<f32>,
+    samples_since_last_analysis: usize,
+    latest_frame: LipSyncFrame,
 }
 
 impl LipSyncAnalyzer {
@@ -483,6 +489,9 @@ impl LipSyncAnalyzer {
             hold_time_seconds: 0.0,
             previous_time_step_seconds: 0.0,
             last_switch_confidence: 1.0,
+            audio_ring: Vec::new(),
+            samples_since_last_analysis: 0,
+            latest_frame: LipSyncFrame::default(),
         }
     }
 
@@ -509,6 +518,71 @@ impl LipSyncAnalyzer {
     }
 
     pub fn process_at_time(&mut self, pcm_data: &[f32], time_seconds: f32) -> LipSyncFrame {
+        if pcm_data.is_empty() {
+            return self.latest_frame;
+        }
+
+        self.append_audio_to_ring(pcm_data);
+        let window_samples = self.analysis_window_samples();
+        let hop_samples = self.analysis_hop_samples();
+        if self.audio_ring.len() < window_samples {
+            self.latest_frame = LipSyncFrame::default();
+            return self.latest_frame;
+        }
+
+        self.samples_since_last_analysis = self
+            .samples_since_last_analysis
+            .saturating_add(pcm_data.len());
+        let mut analyzed = false;
+        while self.samples_since_last_analysis >= hop_samples {
+            let window = self.latest_analysis_window(window_samples);
+            self.latest_frame = self.analyze_pcm_window(&window, time_seconds);
+            self.samples_since_last_analysis -= hop_samples;
+            analyzed = true;
+        }
+
+        if analyzed {
+            self.latest_frame
+        } else {
+            self.latest_frame
+        }
+    }
+
+    fn append_audio_to_ring(&mut self, pcm_data: &[f32]) {
+        self.audio_ring
+            .extend(pcm_data.iter().map(|sample| sample.clamp(-1.0, 1.0)));
+        let capacity = self.ring_capacity_samples();
+        if self.audio_ring.len() > capacity {
+            let overflow = self.audio_ring.len() - capacity;
+            self.audio_ring.drain(0..overflow);
+        }
+    }
+
+    fn latest_analysis_window(&self, window_samples: usize) -> Vec<f32> {
+        let start = self.audio_ring.len().saturating_sub(window_samples);
+        self.audio_ring[start..].to_vec()
+    }
+
+    fn analysis_window_samples(&self) -> usize {
+        let window_ms = if self.options.singing_mode() {
+            SINGING_WINDOW_MS
+        } else {
+            NORMAL_WINDOW_MS
+        };
+        ((self.options.sample_rate as f32 * window_ms / 1000.0).round() as usize).max(1)
+    }
+
+    fn analysis_hop_samples(&self) -> usize {
+        ((self.options.sample_rate as f32 * ANALYSIS_HOP_MS / 1000.0).round() as usize).max(1)
+    }
+
+    fn ring_capacity_samples(&self) -> usize {
+        (self.analysis_window_samples() * 4)
+            .max(self.analysis_hop_samples() * 8)
+            .max(FRAME_SIZE)
+    }
+
+    fn analyze_pcm_window(&mut self, pcm_data: &[f32], time_seconds: f32) -> LipSyncFrame {
         let time_step_seconds = self.time_step_seconds(pcm_data);
         let mut extracted_features = None;
         let classifier_features = if self.options.gmm_enabled() {
@@ -1746,7 +1820,7 @@ mod tests {
     fn high_frequency_noise_prefers_fricative_over_vowels() {
         let mut analyzer = LipSyncAnalyzer::new(SAMPLE_RATE, false);
         let noise = synthetic_high_frequency_noise(0.35);
-        let frame = analyzer.process(&noise);
+        let frame = analyzer.process(&analysis_ready_signal(noise));
         let best_vowel = frame.posterior[LipSyncClass::A as usize..=LipSyncClass::O as usize]
             .iter()
             .copied()
@@ -1790,7 +1864,7 @@ mod tests {
     fn sustained_low_openness_vowel_does_not_become_closed() {
         let mut analyzer = LipSyncAnalyzer::new(SAMPLE_RATE, false);
         let u_like = synthetic_vowel_like_signal(0.45, &[(100.0, 0.7), (260.0, 1.0), (460.0, 0.8)]);
-        let frame = analyzer.process(&u_like);
+        let frame = analyzer.process(&analysis_ready_signal(u_like));
         let best_vowel = frame.posterior[LipSyncClass::A as usize..=LipSyncClass::O as usize]
             .iter()
             .copied()
@@ -1803,7 +1877,7 @@ mod tests {
         let mut analyzer = LipSyncAnalyzer::new(SAMPLE_RATE, false);
         let voiced =
             synthetic_vowel_like_signal(0.5, &[(120.0, 0.4), (720.0, 1.0), (1150.0, 0.65)]);
-        let frame = analyzer.process(&voiced);
+        let frame = analyzer.process(&analysis_ready_signal(voiced));
         let best_vowel = frame.posterior[LipSyncClass::A as usize..=LipSyncClass::O as usize]
             .iter()
             .copied()
@@ -1821,10 +1895,13 @@ mod tests {
             synthetic_vowel_like_signal(0.45, &[(180.0, 0.25), (2200.0, 1.0), (3100.0, 0.6)]);
         let mut normal = LipSyncAnalyzer::new(SAMPLE_RATE, false);
         let mut singing = LipSyncAnalyzer::new(SAMPLE_RATE, true);
-        normal.process(&a_like);
-        singing.process(&a_like);
-        let normal_i = normal.process(&i_like).posterior[LipSyncClass::I as usize];
-        let singing_i = singing.process(&i_like).posterior[LipSyncClass::I as usize];
+        normal.process(&analysis_ready_signal(a_like.clone()));
+        singing.process(&analysis_ready_signal(a_like));
+        let normal_i = normal
+            .process(&analysis_ready_signal(i_like.clone()))
+            .posterior[LipSyncClass::I as usize];
+        let singing_i =
+            singing.process(&analysis_ready_signal(i_like)).posterior[LipSyncClass::I as usize];
         assert!(singing_i < normal_i);
     }
 
@@ -1888,10 +1965,82 @@ mod tests {
         let mut analyzer = LipSyncAnalyzer::new(SAMPLE_RATE, false);
         let voiced =
             synthetic_vowel_like_signal(0.5, &[(120.0, 0.4), (720.0, 1.0), (1150.0, 0.65)]);
-        let frame = analyzer.process(&voiced);
+        let frame = analyzer.process(&analysis_ready_signal(voiced));
         assert_scores_normalized(frame.posterior);
         assert!(frame.jaw_open.is_finite());
         assert!((0.0..=1.0).contains(&frame.jaw_open));
+    }
+
+    #[test]
+    fn processing_1024_once_is_similar_to_128_sample_chunks() {
+        let sample_rate = 16_000;
+        let signal = synthetic_vowel_like_signal_at(
+            sample_rate,
+            1024,
+            0.45,
+            &[(120.0, 0.35), (720.0, 1.0), (1150.0, 0.75)],
+        );
+        let mut whole = LipSyncAnalyzer::new(sample_rate, false);
+        let whole_frame = whole.process(&signal);
+
+        let mut chunked = LipSyncAnalyzer::new(sample_rate, false);
+        let mut chunked_frame = LipSyncFrame::default();
+        for chunk in signal.chunks(128) {
+            chunked_frame = chunked.process(chunk);
+        }
+
+        let drift = whole_frame
+            .posterior
+            .iter()
+            .zip(chunked_frame.posterior.iter())
+            .map(|(whole, chunked)| (whole - chunked).abs())
+            .sum::<f32>();
+        assert!(drift < 0.35, "chunked drift was {drift}");
+    }
+
+    #[test]
+    fn chunks_smaller_than_hop_do_not_panic() {
+        let mut analyzer = LipSyncAnalyzer::new(16_000, false);
+        let chunk = synthetic_vowel_like_signal_at(16_000, 64, 0.35, &[(220.0, 1.0)]);
+        for _ in 0..20 {
+            let frame = analyzer.process(&chunk);
+            assert_scores_normalized(frame.posterior);
+        }
+    }
+
+    #[test]
+    fn sample_rates_produce_reasonable_window_sizes() {
+        let normal_16k = LipSyncAnalyzer::new(16_000, false);
+        let normal_48k = LipSyncAnalyzer::new(48_000, false);
+        assert_eq!(normal_16k.analysis_window_samples(), 400);
+        assert_eq!(normal_48k.analysis_window_samples(), 1200);
+        assert_eq!(normal_16k.analysis_hop_samples(), 160);
+        assert_eq!(normal_48k.analysis_hop_samples(), 480);
+    }
+
+    #[test]
+    fn silence_warmup_returns_rest() {
+        let mut analyzer = LipSyncAnalyzer::new(48_000, false);
+        let frame = analyzer.process(&vec![0.0; 128]);
+        assert!(frame.posterior[LipSyncClass::Rest as usize] > 0.9);
+    }
+
+    #[test]
+    fn ring_buffer_does_not_grow_unbounded() {
+        let mut analyzer = LipSyncAnalyzer::new(16_000, false);
+        let capacity = analyzer.ring_capacity_samples();
+        let chunk = synthetic_vowel_like_signal_at(16_000, 320, 0.2, &[(180.0, 1.0)]);
+        for _ in 0..100 {
+            analyzer.process(&chunk);
+        }
+        assert!(analyzer.audio_ring.len() <= capacity);
+    }
+
+    #[test]
+    fn singing_mode_uses_longer_window_than_normal_mode() {
+        let normal = LipSyncAnalyzer::new(16_000, false);
+        let singing = LipSyncAnalyzer::new(16_000, true);
+        assert!(singing.analysis_window_samples() > normal.analysis_window_samples());
     }
 
     #[test]
@@ -1910,7 +2059,7 @@ mod tests {
             kind: LipSyncCueKind::TtsViseme as u32,
         }]);
         let pcm = synthetic_vowel_like_signal(0.25, &[(120.0, 0.35), (720.0, 1.0), (1150.0, 0.75)]);
-        let frame = analyzer.process_at_time(&pcm, 0.2);
+        let frame = analyzer.process_at_time(&analysis_ready_signal(pcm), 0.2);
         assert!(
             frame.posterior[LipSyncClass::O as usize] > frame.posterior[LipSyncClass::A as usize]
         );
@@ -1957,6 +2106,12 @@ mod tests {
         posterior
     }
 
+    fn analysis_ready_signal(mut signal: Vec<f32>) -> Vec<f32> {
+        let original = signal.clone();
+        signal.extend_from_slice(&original);
+        signal
+    }
+
     fn synthetic_closed_profile(
         rms: f32,
         peak: f32,
@@ -1972,6 +2127,24 @@ mod tests {
             spectral_flatness,
             compression_likelihood: 0.0,
         }
+    }
+
+    fn synthetic_vowel_like_signal_at(
+        sample_rate: u32,
+        len: usize,
+        amplitude: f32,
+        partials: &[(f32, f32)],
+    ) -> Vec<f32> {
+        (0..len)
+            .map(|sample_index| {
+                let time = sample_index as f32 / sample_rate as f32;
+                let sum = partials
+                    .iter()
+                    .map(|(hz, weight)| (2.0 * std::f32::consts::PI * hz * time).sin() * weight)
+                    .sum::<f32>();
+                (sum * amplitude / partials.len() as f32).clamp(-1.0, 1.0)
+            })
+            .collect()
     }
 
     fn synthetic_vowel_like_signal(amplitude: f32, partials: &[(f32, f32)]) -> Vec<f32> {
