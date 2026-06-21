@@ -18,6 +18,7 @@ namespace TobyApi.LipSync
         [SerializeField] private bool enableGmm;
         [SerializeField] private bool robustLoudness = true;
         [SerializeField] private bool useAudioSourceTimeForTimedCues = true;
+        [SerializeField] private LipSyncMapperKind mapperKind = LipSyncMapperKind.Vrm;
         [SerializeField, Range(0f, 1f)] private float metadataWeight = 0.55f;
         [SerializeField, Range(0f, 0.95f)] private float smoothing = 0.18f;
         [SerializeField, Range(0.005f, 0.5f)] private float loudnessAdaptation = 0.07f;
@@ -31,20 +32,31 @@ namespace TobyApi.LipSync
         [SerializeField] private float vowelConfidence;
         [SerializeField] private float f1Hz;
         [SerializeField] private float f2Hz;
+        [SerializeField] private float aa;
+        [SerializeField] private float ih;
+        [SerializeField] private float ou;
+        [SerializeField] private float ee;
+        [SerializeField] private float oh;
+        [SerializeField] private float mouthClose;
+        [SerializeField] private float mouthFunnel;
+        [SerializeField] private float mouthPucker;
+        [SerializeField] private float mouthWide;
 
         private float[] interleavedBuffer;
-        private float[] monoBuffer;
         private float nextAnalysisAt;
         private LipSyncAnalyzer analyzer;
         private int analyzerSampleRate;
         private LipSyncOptions analyzerOptions;
         private LipSyncTimedCue[] pendingTimedCues;
         private bool hasClass;
+        private bool hasMappedFrame;
 
         public bool HasVowel { get; private set; }
         public LipSyncVowel CurrentVowel { get; private set; }
         public LipSyncClass CurrentClass { get; private set; }
         public LipSyncFrame CurrentFrame { get; private set; }
+        public LipSyncMappedFrame CurrentMappedFrame { get; private set; }
+        public bool HasMappedFrame => hasMappedFrame;
         public float JawOpen => jawOpen;
         public VowelEvent OnVowelChanged => onVowelChanged;
         public UnityEvent OnVowelLost => onVowelLost;
@@ -76,15 +88,17 @@ namespace TobyApi.LipSync
         public bool TryAnalyzeNow(out LipSyncFrame frame)
         {
             frame = default(LipSyncFrame);
-            if (!TryReadCurrentFrame() || !EnsureAnalyzer(audioSource.clip.frequency))
+            int frameCount;
+            int channels;
+            if (!TryReadCurrentFrame(out frameCount, out channels) || !EnsureAnalyzer(audioSource.clip.frequency))
             {
                 ClearVowel();
                 return false;
             }
 
             bool processed = useAudioSourceTimeForTimedCues
-                ? analyzer.ProcessAtTime(monoBuffer, audioSource.time, out frame)
-                : analyzer.Process(monoBuffer, out frame);
+                ? analyzer.ProcessInterleavedAtTime(interleavedBuffer, frameCount, channels, audioSource.time, out frame)
+                : analyzer.ProcessInterleaved(interleavedBuffer, frameCount, channels, out frame);
 
             if (!processed)
             {
@@ -98,7 +112,12 @@ namespace TobyApi.LipSync
             f1Hz = frame.f1Hz;
             f2Hz = frame.f2Hz;
 
-            LipSyncClass bestClass = frame.BestClass;
+            LipSyncMappedFrame mappedFrame;
+            hasMappedFrame = LipSync.TryMapFrame(frame, mapperKind, out mappedFrame);
+            CurrentMappedFrame = hasMappedFrame ? mappedFrame : LipSyncMappedFrame.Empty;
+            UpdateMappedFields(mappedFrame, hasMappedFrame);
+
+            LipSyncClass bestClass = hasMappedFrame ? mappedFrame.BestClass : frame.BestClass;
             bool classChanged = !hasClass || CurrentClass != bestClass;
             hasClass = true;
             CurrentClass = bestClass;
@@ -110,15 +129,17 @@ namespace TobyApi.LipSync
                 onClassChanged.Invoke(bestClass);
             }
 
-            UpdateVowelState(bestClass);
+            UpdateVowelState(frame, mappedFrame, hasMappedFrame);
             return true;
         }
 
         public bool TryRecognizeVowelNow(out LipSyncVowel vowel)
         {
             vowel = default(LipSyncVowel);
-            if (!TryAnalyzeNow(out LipSyncFrame frame)) return false;
-            return TryMapVowel(frame.BestClass, out vowel);
+            LipSyncFrame frame;
+            if (!TryAnalyzeNow(out frame)) return false;
+            if (hasMappedFrame && CurrentMappedFrame.TryGetLegacyVowel(out vowel)) return true;
+            return frame.TryGetLegacyVowel(out vowel);
         }
 
         private bool EnsureAnalyzer(int sampleRate)
@@ -165,9 +186,12 @@ namespace TobyApi.LipSync
             analyzerSampleRate = 0;
         }
 
-        private void UpdateVowelState(LipSyncClass bestClass)
+        private void UpdateVowelState(LipSyncFrame frame, LipSyncMappedFrame mappedFrame, bool mapped)
         {
-            if (!TryMapVowel(bestClass, out LipSyncVowel vowel))
+            LipSyncVowel vowel;
+            bool hasLegacyVowel = mapped && mappedFrame.TryGetLegacyVowel(out vowel);
+            if (!hasLegacyVowel) hasLegacyVowel = frame.TryGetLegacyVowel(out vowel);
+            if (!hasLegacyVowel)
             {
                 ClearVowel();
                 return;
@@ -180,56 +204,51 @@ namespace TobyApi.LipSync
             if (changed) onVowelChanged.Invoke(vowel);
         }
 
-        private static bool TryMapVowel(LipSyncClass lipSyncClass, out LipSyncVowel vowel)
+        private bool TryReadCurrentFrame(out int frameCount, out int channels)
         {
-            switch (lipSyncClass)
-            {
-                case LipSyncClass.A: vowel = LipSyncVowel.A; return true;
-                case LipSyncClass.I: vowel = LipSyncVowel.I; return true;
-                case LipSyncClass.U: vowel = LipSyncVowel.U; return true;
-                case LipSyncClass.E: vowel = LipSyncVowel.E; return true;
-                case LipSyncClass.O: vowel = LipSyncVowel.O; return true;
-                default: vowel = default(LipSyncVowel); return false;
-            }
-        }
-
-        private bool TryReadCurrentFrame()
-        {
+            frameCount = 0;
+            channels = 0;
             if (audioSource == null || audioSource.clip == null || !audioSource.isPlaying) return false;
+
             AudioClip clip = audioSource.clip;
-            int channels = Mathf.Max(1, clip.channels);
-            int frameCount = Mathf.Clamp(frameSampleCount, 1, clip.samples);
-            EnsureBuffers(frameCount, channels);
+            channels = Mathf.Max(1, clip.channels);
+            frameCount = Mathf.Clamp(frameSampleCount, 1, clip.samples);
+            EnsureBuffer(frameCount, channels);
 
             int startFrame = audioSource.timeSamples - frameCount;
             while (startFrame < 0) startFrame += clip.samples;
-            if (!clip.GetData(interleavedBuffer, startFrame)) return false;
-
-            if (channels == 1)
-            {
-                Array.Copy(interleavedBuffer, monoBuffer, frameCount);
-                return true;
-            }
-
-            for (int frame = 0; frame < frameCount; frame++)
-            {
-                float sum = 0f;
-                int channelOffset = frame * channels;
-                for (int channel = 0; channel < channels; channel++) sum += interleavedBuffer[channelOffset + channel];
-                monoBuffer[frame] = sum / channels;
-            }
-            return true;
+            return clip.GetData(interleavedBuffer, startFrame);
         }
 
-        private void EnsureBuffers(int frameCount, int channels)
+        private void EnsureBuffer(int frameCount, int channels)
         {
             int interleavedLength = frameCount * channels;
             if (interleavedBuffer == null || interleavedBuffer.Length != interleavedLength) interleavedBuffer = new float[interleavedLength];
-            if (monoBuffer == null || monoBuffer.Length != frameCount) monoBuffer = new float[frameCount];
+        }
+
+        private void UpdateMappedFields(LipSyncMappedFrame mappedFrame, bool mapped)
+        {
+            if (!mapped)
+            {
+                aa = ih = ou = ee = oh = 0f;
+                mouthClose = mouthFunnel = mouthPucker = mouthWide = 0f;
+                return;
+            }
+
+            aa = mappedFrame.aa;
+            ih = mappedFrame.ih;
+            ou = mappedFrame.ou;
+            ee = mappedFrame.ee;
+            oh = mappedFrame.oh;
+            mouthClose = mappedFrame.mouthClose;
+            mouthFunnel = mappedFrame.mouthFunnel;
+            mouthPucker = mappedFrame.mouthPucker;
+            mouthWide = mappedFrame.mouthWide;
         }
 
         private void ClearVowel()
         {
+            hasMappedFrame = false;
             if (!HasVowel) return;
             HasVowel = false;
             currentVowelName = "";

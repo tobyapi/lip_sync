@@ -20,6 +20,14 @@ Assets/Plugins/x86_64/lip_sync.dll
 
 4. Add `MicrophoneLipSyncAnalyzer` to a GameObject with an `AudioSource` that is playing microphone, TTS, song, or voice audio.
 
+## 9-Class and Mapper Output
+
+`LipSyncFrame` is the main output and uses the Rust SDK's 9-class posterior: `REST`, `CLOSED`, `A`, `I`, `U`, `E`, `O`, `FRICATIVE`, `OTHER`. The old `LipSyncVowel` AIUEO API remains for compatibility only.
+
+Use `LipSync.TryMapFrame` or the `CurrentMappedFrame` property on `MicrophoneLipSyncAnalyzer` to consume native mapper output. `LipSyncMapperKind.Vrm` fills `aa`, `ih`, `ou`, `ee`, and `oh`; `Arkit` and `MetaHuman` also fill mouth curve fields such as `mouthClose`, `mouthFunnel`, `mouthPucker`, and `mouthWide`.
+
+The microphone component reads Unity's interleaved `AudioClip` buffer, then passes it to Rust through `ProcessInterleaved`; channel downmixing no longer needs to be duplicated in Unity code.
+
 ## Timed Metadata
 
 Use `SetTimedCues` with `LipSyncTimedCue` entries for TTS viseme metadata or lyric timing. The cue `classIndex` uses the same 9-class order as the Rust SDK: `REST`, `CLOSED`, `A`, `I`, `U`, `E`, `O`, `FRICATIVE`, `OTHER`.

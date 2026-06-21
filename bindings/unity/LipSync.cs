@@ -7,6 +7,7 @@ namespace TobyApi.LipSync
     public enum LipSyncVowel { A = 0, I = 1, U = 2, E = 3, O = 4 }
     public enum LipSyncClass { Rest = 0, Closed = 1, A = 2, I = 3, U = 4, E = 5, O = 6, Fricative = 7, Other = 8 }
     public enum LipSyncCueKind { TtsViseme = 1, LyricTiming = 2 }
+    public enum LipSyncMapperKind : uint { Generic = 0, Vrm = 1, Arkit = 2, MetaHuman = 3 }
 
     [Flags]
     public enum LipSyncOptionsFlags : uint
@@ -105,6 +106,23 @@ namespace TobyApi.LipSync
         {
             get
             {
+                LipSyncFrame frame = this;
+                LipSyncClass bestClass;
+                return LipSync.TryGetBestClass(ref frame, out bestClass) ? bestClass : BestClassFallback;
+            }
+        }
+
+        public bool TryGetLegacyVowel(out LipSyncVowel vowel)
+        {
+            LipSyncFrame frame = this;
+            if (LipSync.TryGetLegacyVowel(ref frame, out vowel)) return true;
+            return TryMapLegacyVowelFallback(BestClassFallback, out vowel);
+        }
+
+        private LipSyncClass BestClassFallback
+        {
+            get
+            {
                 LipSyncClass bestClass = LipSyncClass.Rest;
                 float bestScore = rest;
                 for (int index = 1; index <= (int)LipSyncClass.Other; index++)
@@ -120,6 +138,75 @@ namespace TobyApi.LipSync
                 return bestClass;
             }
         }
+
+        private static bool TryMapLegacyVowelFallback(LipSyncClass lipSyncClass, out LipSyncVowel vowel)
+        {
+            switch (lipSyncClass)
+            {
+                case LipSyncClass.A: vowel = LipSyncVowel.A; return true;
+                case LipSyncClass.I: vowel = LipSyncVowel.I; return true;
+                case LipSyncClass.U: vowel = LipSyncVowel.U; return true;
+                case LipSyncClass.E: vowel = LipSyncVowel.E; return true;
+                case LipSyncClass.O: vowel = LipSyncVowel.O; return true;
+                default: vowel = default(LipSyncVowel); return false;
+            }
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct LipSyncMappedFrame
+    {
+        public uint kind;
+        public uint bestClass;
+        public int legacyVowel;
+        public float confidence;
+        public float jawOpen;
+        public float aa;
+        public float ih;
+        public float ou;
+        public float ee;
+        public float oh;
+        public float mouthClose;
+        public float mouthFunnel;
+        public float mouthPucker;
+        public float mouthWide;
+        public float mouthSmileLeft;
+        public float mouthSmileRight;
+        public float mouthLowerDownLeft;
+        public float mouthLowerDownRight;
+        public float mouthUpperUpLeft;
+        public float mouthUpperUpRight;
+        public float mouthPressLeft;
+        public float mouthPressRight;
+        public float fricative;
+
+        public LipSyncMapperKind Kind => (LipSyncMapperKind)kind;
+        public LipSyncClass BestClass => (LipSyncClass)bestClass;
+        public bool HasLegacyVowel => legacyVowel >= 0;
+
+        public static LipSyncMappedFrame Empty
+        {
+            get
+            {
+                LipSyncMappedFrame frame = default(LipSyncMappedFrame);
+                frame.bestClass = (uint)LipSyncClass.Rest;
+                frame.legacyVowel = -1;
+                frame.confidence = 1f;
+                return frame;
+            }
+        }
+
+        public bool TryGetLegacyVowel(out LipSyncVowel vowel)
+        {
+            if (legacyVowel >= 0 && legacyVowel <= (int)LipSyncVowel.O)
+            {
+                vowel = (LipSyncVowel)legacyVowel;
+                return true;
+            }
+
+            vowel = default(LipSyncVowel);
+            return false;
+        }
     }
 
     public sealed class LipSyncAnalyzer : IDisposable
@@ -129,6 +216,12 @@ namespace TobyApi.LipSync
         public bool IsValid => handle != IntPtr.Zero;
         public bool Process(float[] pcm, out LipSyncFrame frame) { return LipSync.TryProcessAnalyzer(handle, pcm, out frame); }
         public bool ProcessAtTime(float[] pcm, float timeSeconds, out LipSyncFrame frame) { return LipSync.TryProcessAnalyzerAtTime(handle, pcm, timeSeconds, out frame); }
+        public bool ProcessMapped(float[] pcm, LipSyncMapperKind mapperKind, out LipSyncMappedFrame frame) { return LipSync.TryProcessAnalyzerMapped(handle, pcm, mapperKind, out frame); }
+        public bool ProcessAtTimeMapped(float[] pcm, float timeSeconds, LipSyncMapperKind mapperKind, out LipSyncMappedFrame frame) { return LipSync.TryProcessAnalyzerAtTimeMapped(handle, pcm, timeSeconds, mapperKind, out frame); }
+        public bool ProcessInterleaved(float[] pcm, int frameCount, int channels, out LipSyncFrame frame) { return LipSync.TryProcessAnalyzerInterleaved(handle, pcm, frameCount, channels, out frame); }
+        public bool ProcessInterleavedAtTime(float[] pcm, int frameCount, int channels, float timeSeconds, out LipSyncFrame frame) { return LipSync.TryProcessAnalyzerInterleavedAtTime(handle, pcm, frameCount, channels, timeSeconds, out frame); }
+        public bool ProcessInterleavedMapped(float[] pcm, int frameCount, int channels, LipSyncMapperKind mapperKind, out LipSyncMappedFrame frame) { return LipSync.TryProcessAnalyzerInterleavedMapped(handle, pcm, frameCount, channels, mapperKind, out frame); }
+        public bool ProcessInterleavedAtTimeMapped(float[] pcm, int frameCount, int channels, float timeSeconds, LipSyncMapperKind mapperKind, out LipSyncMappedFrame frame) { return LipSync.TryProcessAnalyzerInterleavedAtTimeMapped(handle, pcm, frameCount, channels, timeSeconds, mapperKind, out frame); }
         public bool SetTimedCues(LipSyncTimedCue[] cues) { return LipSync.TrySetTimedCues(handle, cues); }
         public bool ClearTimedCues() { return LipSync.TryClearTimedCues(handle); }
 
@@ -162,6 +255,36 @@ namespace TobyApi.LipSync
             return false;
         }
 
+        public static bool TryGetDefaultOptions(int sampleRate, out LipSyncOptions options)
+        {
+            options = default(LipSyncOptions);
+            if (!nativeAvailable || sampleRate <= 0) return false;
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+            try
+            {
+                options = NativeMethods.lipsync_default_options((uint)sampleRate);
+                return options.sampleRate > 0;
+            }
+            catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
+#endif
+            return false;
+        }
+
+        public static bool TryGetSingingOptions(int sampleRate, out LipSyncOptions options)
+        {
+            options = default(LipSyncOptions);
+            if (!nativeAvailable || sampleRate <= 0) return false;
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+            try
+            {
+                options = NativeMethods.lipsync_singing_options((uint)sampleRate);
+                return options.sampleRate > 0;
+            }
+            catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
+#endif
+            return false;
+        }
+
         public static bool TryCreateAnalyzer(int sampleRate, bool singingMode, out LipSyncAnalyzer analyzer)
         {
             LipSyncOptions options = LipSyncOptions.Create(sampleRate, singingMode, false, false, true);
@@ -187,6 +310,53 @@ namespace TobyApi.LipSync
             return false;
         }
 
+        public static bool TryMapFrame(LipSyncFrame frame, LipSyncMapperKind mapperKind, out LipSyncMappedFrame mappedFrame)
+        {
+            mappedFrame = LipSyncMappedFrame.Empty;
+            if (!nativeAvailable) return false;
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+            try { return NativeMethods.lipsync_map_frame(ref frame, (uint)mapperKind, out mappedFrame); }
+            catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
+#endif
+            return false;
+        }
+
+        internal static bool TryGetBestClass(ref LipSyncFrame frame, out LipSyncClass bestClass)
+        {
+            bestClass = LipSyncClass.Rest;
+            if (!nativeAvailable) return false;
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+            try
+            {
+                uint classIndex;
+                bool ok = NativeMethods.lipsync_frame_best_class(ref frame, out classIndex);
+                if (!ok) return false;
+                bestClass = (LipSyncClass)classIndex;
+                return true;
+            }
+            catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
+#endif
+            return false;
+        }
+
+        internal static bool TryGetLegacyVowel(ref LipSyncFrame frame, out LipSyncVowel vowel)
+        {
+            vowel = default(LipSyncVowel);
+            if (!nativeAvailable) return false;
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+            try
+            {
+                int vowelIndex;
+                bool ok = NativeMethods.lipsync_frame_legacy_vowel(ref frame, out vowelIndex);
+                if (!ok || vowelIndex < 0 || vowelIndex > (int)LipSyncVowel.O) return false;
+                vowel = (LipSyncVowel)vowelIndex;
+                return true;
+            }
+            catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
+#endif
+            return false;
+        }
+
         internal static bool TryProcessAnalyzer(IntPtr handle, float[] pcm, out LipSyncFrame frame)
         {
             frame = default(LipSyncFrame);
@@ -204,6 +374,72 @@ namespace TobyApi.LipSync
             if (!nativeAvailable || handle == IntPtr.Zero || pcm == null || pcm.Length == 0) return false;
 #if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
             try { return NativeMethods.lipsync_process_at_time(handle, pcm, (UIntPtr)pcm.Length, Mathf.Max(0f, timeSeconds), out frame); }
+            catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
+#endif
+            return false;
+        }
+
+        internal static bool TryProcessAnalyzerMapped(IntPtr handle, float[] pcm, LipSyncMapperKind mapperKind, out LipSyncMappedFrame frame)
+        {
+            frame = LipSyncMappedFrame.Empty;
+            if (!nativeAvailable || handle == IntPtr.Zero || pcm == null || pcm.Length == 0) return false;
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+            try { return NativeMethods.lipsync_process_mapped(handle, pcm, (UIntPtr)pcm.Length, (uint)mapperKind, out frame); }
+            catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
+#endif
+            return false;
+        }
+
+        internal static bool TryProcessAnalyzerAtTimeMapped(IntPtr handle, float[] pcm, float timeSeconds, LipSyncMapperKind mapperKind, out LipSyncMappedFrame frame)
+        {
+            frame = LipSyncMappedFrame.Empty;
+            if (!nativeAvailable || handle == IntPtr.Zero || pcm == null || pcm.Length == 0) return false;
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+            try { return NativeMethods.lipsync_process_at_time_mapped(handle, pcm, (UIntPtr)pcm.Length, Mathf.Max(0f, timeSeconds), (uint)mapperKind, out frame); }
+            catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
+#endif
+            return false;
+        }
+
+        internal static bool TryProcessAnalyzerInterleaved(IntPtr handle, float[] pcm, int frameCount, int channels, out LipSyncFrame frame)
+        {
+            frame = default(LipSyncFrame);
+            if (!CanProcessInterleaved(handle, pcm, frameCount, channels)) return false;
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+            try { return NativeMethods.lipsync_process_interleaved(handle, pcm, (UIntPtr)frameCount, (uint)channels, out frame); }
+            catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
+#endif
+            return false;
+        }
+
+        internal static bool TryProcessAnalyzerInterleavedAtTime(IntPtr handle, float[] pcm, int frameCount, int channels, float timeSeconds, out LipSyncFrame frame)
+        {
+            frame = default(LipSyncFrame);
+            if (!CanProcessInterleaved(handle, pcm, frameCount, channels)) return false;
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+            try { return NativeMethods.lipsync_process_interleaved_at_time(handle, pcm, (UIntPtr)frameCount, (uint)channels, Mathf.Max(0f, timeSeconds), out frame); }
+            catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
+#endif
+            return false;
+        }
+
+        internal static bool TryProcessAnalyzerInterleavedMapped(IntPtr handle, float[] pcm, int frameCount, int channels, LipSyncMapperKind mapperKind, out LipSyncMappedFrame frame)
+        {
+            frame = LipSyncMappedFrame.Empty;
+            if (!CanProcessInterleaved(handle, pcm, frameCount, channels)) return false;
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+            try { return NativeMethods.lipsync_process_interleaved_mapped(handle, pcm, (UIntPtr)frameCount, (uint)channels, (uint)mapperKind, out frame); }
+            catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
+#endif
+            return false;
+        }
+
+        internal static bool TryProcessAnalyzerInterleavedAtTimeMapped(IntPtr handle, float[] pcm, int frameCount, int channels, float timeSeconds, LipSyncMapperKind mapperKind, out LipSyncMappedFrame frame)
+        {
+            frame = LipSyncMappedFrame.Empty;
+            if (!CanProcessInterleaved(handle, pcm, frameCount, channels)) return false;
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+            try { return NativeMethods.lipsync_process_interleaved_at_time_mapped(handle, pcm, (UIntPtr)frameCount, (uint)channels, Mathf.Max(0f, timeSeconds), (uint)mapperKind, out frame); }
             catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
 #endif
             return false;
@@ -242,6 +478,12 @@ namespace TobyApi.LipSync
 #endif
         }
 
+        private static bool CanProcessInterleaved(IntPtr handle, float[] pcm, int frameCount, int channels)
+        {
+            if (!nativeAvailable || handle == IntPtr.Zero || pcm == null || frameCount <= 0 || channels <= 0) return false;
+            return pcm.Length >= frameCount * channels;
+        }
+
         private static bool IsNativeException(Exception exception)
         {
             return exception is DllNotFoundException || exception is EntryPointNotFoundException || exception is BadImageFormatException;
@@ -264,15 +506,58 @@ namespace TobyApi.LipSync
             internal static extern bool recognize_vowel([In] float[] pcmData, UIntPtr len, uint sampleRate, out LipSyncVowel result);
 
             [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+            internal static extern LipSyncOptions lipsync_default_options(uint sampleRate);
+
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+            internal static extern LipSyncOptions lipsync_singing_options(uint sampleRate);
+
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool lipsync_frame_best_class([In] ref LipSyncFrame frame, out uint result);
+
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool lipsync_frame_legacy_vowel([In] ref LipSyncFrame frame, out int result);
+
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool lipsync_map_frame([In] ref LipSyncFrame frame, uint mapperKind, out LipSyncMappedFrame result);
+
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
             internal static extern IntPtr lipsync_create_with_options(LipSyncOptions options);
 
             [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
             [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool lipsync_process(IntPtr analyzer, [In] float[] pcmData, UIntPtr len, out LipSyncFrame result);
 
+
             [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
             [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool lipsync_process_at_time(IntPtr analyzer, [In] float[] pcmData, UIntPtr len, float timeSeconds, out LipSyncFrame result);
+
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool lipsync_process_mapped(IntPtr analyzer, [In] float[] pcmData, UIntPtr len, uint mapperKind, out LipSyncMappedFrame result);
+
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool lipsync_process_at_time_mapped(IntPtr analyzer, [In] float[] pcmData, UIntPtr len, float timeSeconds, uint mapperKind, out LipSyncMappedFrame result);
+
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool lipsync_process_interleaved(IntPtr analyzer, [In] float[] pcmData, UIntPtr frameCount, uint channels, out LipSyncFrame result);
+
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool lipsync_process_interleaved_at_time(IntPtr analyzer, [In] float[] pcmData, UIntPtr frameCount, uint channels, float timeSeconds, out LipSyncFrame result);
+
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool lipsync_process_interleaved_mapped(IntPtr analyzer, [In] float[] pcmData, UIntPtr frameCount, uint channels, uint mapperKind, out LipSyncMappedFrame result);
+
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool lipsync_process_interleaved_at_time_mapped(IntPtr analyzer, [In] float[] pcmData, UIntPtr frameCount, uint channels, float timeSeconds, uint mapperKind, out LipSyncMappedFrame result);
 
             [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
             [return: MarshalAs(UnmanagedType.I1)]

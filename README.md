@@ -14,14 +14,13 @@ Implemented scope in this repository:
 - MFCC/voicing feature extractor for future trained-model experiments.
 - Robust rolling loudness normalization for profile-free adaptation, with CMVN helper code reserved for future trained model paths.
 - TTS viseme metadata and lyric timing fusion through timed class cues.
+- Engine-agnostic mapped output for generic, VRM, ARKit-style, and MetaHuman-style mouth controls.
+- Interleaved PCM processing helpers for bindings that receive engine-native multi-channel audio buffers.
 - Legacy single-vowel C ABI for compatibility.
 
 Not implemented here:
 
-- Unreal integration.
-- VRM mapper.
-- ARKit mapper.
-- MetaHuman mapper.
+- Unreal integration package/wrapper. The native mapper API is engine-agnostic and can be consumed by Unreal or other hosts.
 
 ## Rust Build
 
@@ -59,6 +58,14 @@ The frame also includes:
 - `vowel_confidence`: confidence for the A/I/U/E/O evidence.
 - `f1_hz`, `f2_hz`: debug/visualization formant estimates only.
 
+For engine integration, `LipSyncMappedFrame` provides stable mouth-control weights derived from the 9-class posterior:
+
+- `aa`, `ih`, `ou`, `ee`, `oh`: VRM/Japanese vowel-style viseme weights.
+- `mouth_close`, `mouth_funnel`, `mouth_pucker`, `mouth_wide`, `mouth_*`: ARKit-style and MetaHuman-style curve weights.
+- `best_class` and `legacy_vowel`: native helper outputs so bindings do not need to duplicate class selection or AIUEO compatibility mapping.
+
+Mapper kinds are `0` generic, `1` VRM, `2` ARKit-style, and `3` MetaHuman-style. AIUEO is kept as a compatibility surface; new integrations should prefer the 9-class posterior or mapped output.
+
 ## Options
 
 ```c
@@ -92,12 +99,24 @@ bool recognize_vowel(const float* pcm, size_t len, uint32_t sample_rate, Vowel* 
 Stateful SDK API:
 
 ```c
+LipSyncOptions lipsync_default_options(uint32_t sample_rate);
+LipSyncOptions lipsync_singing_options(uint32_t sample_rate);
 LipSyncAnalyzer* lipsync_create(uint32_t sample_rate, bool singing_mode);
 LipSyncAnalyzer* lipsync_create_with_options(LipSyncOptions options);
 bool lipsync_process(LipSyncAnalyzer* analyzer, const float* pcm, size_t len, LipSyncFrame* result);
 bool lipsync_process_debug(LipSyncAnalyzer* analyzer, const float* pcm, size_t len, LipSyncDebugFrame* result);
 bool lipsync_process_at_time(LipSyncAnalyzer* analyzer, const float* pcm, size_t len, float time_seconds, LipSyncFrame* result);
 bool lipsync_process_at_time_debug(LipSyncAnalyzer* analyzer, const float* pcm, size_t len, float time_seconds, LipSyncDebugFrame* result);
+bool lipsync_process_mapped(LipSyncAnalyzer* analyzer, const float* pcm, size_t len, uint32_t mapper_kind, LipSyncMappedFrame* result);
+bool lipsync_process_at_time_mapped(LipSyncAnalyzer* analyzer, const float* pcm, size_t len, float time_seconds, uint32_t mapper_kind, LipSyncMappedFrame* result);
+bool lipsync_process_interleaved(LipSyncAnalyzer* analyzer, const float* pcm, size_t frame_count, uint32_t channels, LipSyncFrame* result);
+bool lipsync_process_interleaved_at_time(LipSyncAnalyzer* analyzer, const float* pcm, size_t frame_count, uint32_t channels, float time_seconds, LipSyncFrame* result);
+bool lipsync_process_interleaved_mapped(LipSyncAnalyzer* analyzer, const float* pcm, size_t frame_count, uint32_t channels, uint32_t mapper_kind, LipSyncMappedFrame* result);
+bool lipsync_process_interleaved_at_time_mapped(LipSyncAnalyzer* analyzer, const float* pcm, size_t frame_count, uint32_t channels, float time_seconds, uint32_t mapper_kind, LipSyncMappedFrame* result);
+bool lipsync_frame_best_class(const LipSyncFrame* frame, uint32_t* result);
+bool lipsync_frame_legacy_vowel(const LipSyncFrame* frame, int32_t* result);
+bool lipsync_frame_class_score(const LipSyncFrame* frame, uint32_t class_index, float* result);
+bool lipsync_map_frame(const LipSyncFrame* frame, uint32_t mapper_kind, LipSyncMappedFrame* result);
 bool lipsync_set_timed_cues(LipSyncAnalyzer* analyzer, const LipSyncTimedCue* cues, size_t len);
 bool lipsync_clear_timed_cues(LipSyncAnalyzer* analyzer);
 void lipsync_destroy(LipSyncAnalyzer* analyzer);

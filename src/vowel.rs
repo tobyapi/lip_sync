@@ -315,6 +315,23 @@ impl Default for LipSyncOptions {
 }
 
 impl LipSyncOptions {
+    pub fn for_sample_rate(sample_rate: u32) -> Self {
+        Self {
+            sample_rate: sample_rate.max(1),
+            ..Self::default()
+        }
+    }
+
+    pub fn singing_preset(sample_rate: u32) -> Self {
+        Self {
+            sample_rate: sample_rate.max(1),
+            flags: LIPSYNC_FLAG_ROBUST_LOUDNESS | LIPSYNC_FLAG_SINGING_MODE,
+            metadata_weight: DEFAULT_METADATA_WEIGHT,
+            smoothing: 0.65,
+            loudness_adaptation: DEFAULT_LOUDNESS_ADAPTATION,
+        }
+    }
+
     pub fn normalized(mut self) -> Self {
         self.sample_rate = self.sample_rate.max(1);
         self.metadata_weight = if self.flags & LIPSYNC_FLAG_TIMED_CUES != 0 {
@@ -429,6 +446,46 @@ impl Default for LipSyncFrame {
             f1_hz: 0.0,
             f2_hz: 0.0,
         }
+    }
+}
+
+impl LipSyncFrame {
+    pub fn best_class(&self) -> LipSyncClass {
+        best_class(&self.posterior)
+    }
+
+    pub fn best_class_score(&self) -> f32 {
+        self.posterior[self.best_class() as usize]
+    }
+
+    pub fn legacy_vowel(&self) -> Option<Vowel> {
+        legacy_vowel_from_class(self.best_class())
+    }
+}
+
+pub fn lip_sync_class_from_index(index: u32) -> Option<LipSyncClass> {
+    match index {
+        0 => Some(LipSyncClass::Rest),
+        1 => Some(LipSyncClass::Closed),
+        2 => Some(LipSyncClass::A),
+        3 => Some(LipSyncClass::I),
+        4 => Some(LipSyncClass::U),
+        5 => Some(LipSyncClass::E),
+        6 => Some(LipSyncClass::O),
+        7 => Some(LipSyncClass::Fricative),
+        8 => Some(LipSyncClass::Other),
+        _ => None,
+    }
+}
+
+pub fn legacy_vowel_from_class(class: LipSyncClass) -> Option<Vowel> {
+    match class {
+        LipSyncClass::A => Some(Vowel::A),
+        LipSyncClass::I => Some(Vowel::I),
+        LipSyncClass::U => Some(Vowel::U),
+        LipSyncClass::E => Some(Vowel::E),
+        LipSyncClass::O => Some(Vowel::O),
+        _ => None,
     }
 }
 
@@ -548,6 +605,7 @@ impl AnalysisRing {
         Some(self.audio[start_index..end_index].to_vec())
     }
 
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.audio.len()
     }
