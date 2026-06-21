@@ -125,4 +125,4 @@ The evaluator reads mono or stereo PCM WAV files, downmixes to mono, runs the C 
 
 ## Classifier Notes
 
-The main vowel evidence path is normalized log band-energy prototype matching, optionally blended with a tiny NN. The classifier intentionally does not use F1/F2 polygon mapping. LPC/formants remain only as debug and auxiliary evidence.
+The main vowel evidence path is normalized log band-energy prototype matching, optionally blended with a tiny NN. The classifier intentionally does not use F1/F2 polygon mapping. LPC/formants remain only as debug and auxiliary evidence. Compressed, clipped, and shouted voices use feature smoothing plus a weak broad vowel prior capped at 0.18 so mouth shape is preserved; compression mainly dampens confidence and stabilizes jaw opening instead of forcing an A-heavy distribution.

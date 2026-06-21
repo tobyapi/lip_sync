@@ -17,6 +17,7 @@ const SILENCE_RMS: f32 = 0.0005;
 const DEFAULT_METADATA_WEIGHT: f32 = 0.55;
 const DEFAULT_SMOOTHING: f32 = 0.18;
 const DEFAULT_LOUDNESS_ADAPTATION: f32 = 0.07;
+const COMPRESSED_VOWEL_PRIOR_MAX_WEIGHT: f32 = 0.18;
 
 const BANDS_HZ: [(f32, f32); NUM_BANDS] = [
     (80.0, 200.0),
@@ -384,6 +385,14 @@ impl LipSyncAnalyzer {
             * (1.0 - posterior[LipSyncClass::Rest as usize])
             * (1.0 - posterior[LipSyncClass::Closed as usize] * 0.5))
             .clamp(0.0, 1.0);
+        if self.options.robust_loudness_enabled() {
+            let compression_jaw_floor = 0.10
+                * profile.compression_likelihood
+                * activity
+                * (1.0 - posterior[LipSyncClass::Rest as usize])
+                * (1.0 - posterior[LipSyncClass::Closed as usize]);
+            jaw_open = jaw_open.max(compression_jaw_floor).clamp(0.0, 1.0);
+        }
         if self.options.singing_mode() {
             jaw_open = self.previous_jaw_open * 0.45 + jaw_open * 0.55;
         }
@@ -535,10 +544,13 @@ pub fn analyze_vowel_evidence_with_options(
     let separation = (best - second).clamp(0.0, 1.0);
     let activity = ((profile.rms - SILENCE_RMS) / 0.018)
         .clamp(0.0, 1.0)
-        .max(0.2 * profile.compression_likelihood);
-    let confidence =
-        (activity * (0.25 + separation * 2.8) * (1.0 - profile.spectral_flatness * 0.25))
-            .clamp(0.0, 1.0);
+        .max(0.08 * profile.compression_likelihood);
+    let confidence_damping = compression_confidence_damping(profile.compression_likelihood);
+    let confidence = (activity
+        * (0.25 + separation * 2.8)
+        * (1.0 - profile.spectral_flatness * 0.25)
+        * confidence_damping)
+        .clamp(0.0, 1.0);
 
     VowelEvidence {
         scores,
@@ -726,6 +738,8 @@ fn normalize_feature(mut feature: [f32; NUM_BANDS]) -> [f32; NUM_BANDS] {
     feature
 }
 
+// Compression should preserve mouth-shape evidence. It smooths harsh spectral artifacts
+// from clipping/limiting but does not push the feature toward a specific vowel.
 fn compensate_compressed_feature(
     feature: [f32; NUM_BANDS],
     compression_likelihood: f32,
@@ -748,12 +762,12 @@ fn compensate_compressed_feature(
             feature[index]
         };
         compensated[index] =
-            feature[index] * (1.0 - 0.35 * amount) + (left + right) * 0.175 * amount;
+            feature[index] * (1.0 - 0.16 * amount) + (left + right) * 0.08 * amount;
     }
 
     for index in 10..NUM_BANDS {
         let high_shelf = (index - 9) as f32 / (NUM_BANDS - 9) as f32;
-        compensated[index] -= amount * high_shelf * 0.28;
+        compensated[index] -= amount * high_shelf * 0.10;
     }
 
     normalize_feature(compensated)
@@ -769,13 +783,20 @@ fn cosine_similarity(a: &[f32; NUM_BANDS], b: &[f32; NUM_BANDS]) -> f32 {
         .clamp(-1.0, 1.0)
 }
 
+fn compression_confidence_damping(compression_likelihood: f32) -> f32 {
+    (1.0 - 0.22 * compression_likelihood.clamp(0.0, 1.0)).clamp(0.78, 1.0)
+}
+
 fn apply_compressed_voice_prior(scores: &mut [f32; NUM_VOWELS], compression_likelihood: f32) {
-    let weight = (compression_likelihood * 1.8).clamp(0.0, 0.95);
+    let weight = (compression_likelihood.clamp(0.0, 1.0) * COMPRESSED_VOWEL_PRIOR_MAX_WEIGHT)
+        .clamp(0.0, COMPRESSED_VOWEL_PRIOR_MAX_WEIGHT);
     if weight <= 0.01 {
         return;
     }
 
-    let compressed_prior = [0.50, 0.03, 0.10, 0.17, 0.20];
+    // Keep this prior deliberately weak and broad. Compressed or shouted voices
+    // should affect level/confidence handling more than vowel identity.
+    let compressed_prior = [0.28, 0.13, 0.17, 0.20, 0.22];
     for index in 0..NUM_VOWELS {
         scores[index] = scores[index] * (1.0 - weight) + compressed_prior[index] * weight;
     }
@@ -1047,21 +1068,64 @@ mod tests {
     }
 
     #[test]
-    fn clipped_or_compressed_voice_keeps_vowel_shape() {
+    fn clipped_or_compressed_voice_is_not_forced_to_a_by_prior() {
         let clean =
             synthetic_vowel_like_signal(0.35, &[(120.0, 0.35), (720.0, 1.0), (1150.0, 0.75)]);
-        let clipped: Vec<f32> = clean
-            .iter()
-            .map(|sample| (*sample * 5.0).clamp(-0.92, 0.92))
-            .collect();
-        let clean_scores = analyze_vowel_evidence(&clean, SAMPLE_RATE).scores;
+        let clipped = clipped_signal(&clean, 5.0, 0.92);
         let clipped_scores = analyze_vowel_evidence(&clipped, SAMPLE_RATE).scores;
-        let difference = clean_scores
-            .iter()
-            .zip(clipped_scores.iter())
-            .map(|(clean, clipped)| (clean - clipped).abs())
-            .sum::<f32>();
-        assert!(difference < 0.3, "compressed score drift was {difference}");
+        assert_scores_normalized(clipped_scores);
+        assert!(
+            clipped_scores[Vowel::A as usize] < 0.45,
+            "compressed prior over-forced A: {clipped_scores:?}"
+        );
+    }
+
+    #[test]
+    fn loud_clipped_i_like_signal_does_not_collapse_to_a() {
+        let clean =
+            synthetic_vowel_like_signal(0.45, &[(180.0, 0.25), (2200.0, 1.0), (3100.0, 0.6)]);
+        let clipped = clipped_signal(&clean, 6.0, 0.96);
+        let scores = analyze_vowel_evidence(&clipped, SAMPLE_RATE).scores;
+        assert_scores_normalized(scores);
+        assert_ne!(
+            best_vowel_from_scores(scores),
+            Vowel::A,
+            "I-like clipped voice collapsed to A: {scores:?}"
+        );
+    }
+
+    #[test]
+    fn loud_clipped_u_like_signal_does_not_collapse_to_a() {
+        let clean = synthetic_vowel_like_signal(0.45, &[(100.0, 0.7), (260.0, 1.0), (460.0, 0.8)]);
+        let clipped = clipped_signal(&clean, 6.0, 0.96);
+        let scores = analyze_vowel_evidence(&clipped, SAMPLE_RATE).scores;
+        assert_scores_normalized(scores);
+        assert_ne!(
+            best_vowel_from_scores(scores),
+            Vowel::A,
+            "U-like clipped voice collapsed to A: {scores:?}"
+        );
+    }
+
+    #[test]
+    fn compressed_voice_prior_keeps_scores_normalized_without_dominating_identity() {
+        let mut scores = [0.03, 0.64, 0.24, 0.05, 0.04];
+        apply_compressed_voice_prior(&mut scores, 1.0);
+        assert_scores_normalized(scores);
+        assert_eq!(best_vowel_from_scores(scores), Vowel::I);
+        assert!(
+            scores[Vowel::A as usize] < 0.12,
+            "weak prior over-weighted A: {scores:?}"
+        );
+    }
+
+    #[test]
+    fn compression_confidence_damping_is_controlled() {
+        let clean = compression_confidence_damping(0.0);
+        let compressed = compression_confidence_damping(1.0);
+        assert_eq!(clean, 1.0);
+        assert!(compressed < clean);
+        assert!(compressed >= 0.78);
     }
 
     #[test]
@@ -1177,6 +1241,13 @@ mod tests {
                     .sum::<f32>();
                 (sum * amplitude / partials.len() as f32).clamp(-1.0, 1.0)
             })
+            .collect()
+    }
+
+    fn clipped_signal(samples: &[f32], gain: f32, limit: f32) -> Vec<f32> {
+        samples
+            .iter()
+            .map(|sample| (*sample * gain).clamp(-limit, limit))
             .collect()
     }
 
