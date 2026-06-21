@@ -109,6 +109,20 @@ Important Unity options:
 - `metadataWeight`: controls TTS/lyric timed cue influence.
 - `useAudioSourceTimeForTimedCues`: uses `AudioSource.time` for metadata lookup.
 
+## Evaluation Workflow
+
+Use the real-audio evaluator before claiming accuracy changes. The repository defines a local dataset layout under `testdata/real_audio`, but real WAV files are not required or committed.
+
+```sh
+cargo build --release
+python3 scripts/evaluate_dataset.py \
+  --library target/release/liblip_sync.so \
+  --dataset testdata/real_audio \
+  --out target/lipsync_eval
+```
+
+The evaluator reads mono or stereo PCM WAV files, downmixes to mono, runs the C ABI with configurable chunks, and writes `frames.csv`, `summary.json`, and `confusion_matrix.csv`. The summary includes vowel top-1/top-2 accuracy, rest rejection, fricative and closed detection when labels exist, average jaw opening, class switches per second, and mean posterior entropy.
+
 ## Classifier Notes
 
 The main vowel evidence path is normalized log band-energy prototype matching, optionally blended with a tiny NN. The classifier intentionally does not use F1/F2 polygon mapping. LPC/formants remain only as debug and auxiliary evidence.
