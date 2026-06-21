@@ -75,3 +75,16 @@ python3 scripts/evaluate_dataset.py \
 ```
 
 `LIPSYNC_FLAG_GMM` consumes `normalized_bands[16]`. It does not consume the 31-dim `FeatureVector.values`. If `src/trained_band_gmm.rs` still contains empty generated arrays, runtime GMM mode falls back to the placeholder 16-band prototype GMM, which is infrastructure only and not an accuracy model.
+
+## Evaluation comparison
+
+Compare default and GMM evaluation directories produced from the same dataset:
+
+```sh
+python3 scripts/compare_evaluations.py \
+  --baseline target/eval_default_test \
+  --candidate target/eval_gmm_test \
+  --out target/eval_compare
+```
+
+The report includes `compare_summary.json`, `confusion_delta.csv`, `per_label_metrics.csv`, and `error_breakdown.csv` for raw-vowel, final-class, absorption, pair-confusion, and class-switch deltas.

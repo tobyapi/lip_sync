@@ -172,6 +172,28 @@ python3 scripts/evaluate_dataset.py \
 
 `--feature-set band` trains only labels `A`, `I`, `U`, `E`, and `O` in the fixed vowel order used by the runtime. The generated GMM consumes `normalized_bands[16]`; it does not consume the 31-dimensional `FeatureVector.values` path.
 
+## Comparing Evaluations
+
+After exporting a trained band GMM and rebuilding, run default and GMM evaluations against the same dataset, then compare the outputs:
+
+```sh
+python3 scripts/evaluate_dataset.py \
+  --library target/release/liblip_sync.so \
+  --dataset testdata/real_audio \
+  --out target/eval_default_test
+python3 scripts/evaluate_dataset.py \
+  --library target/release/liblip_sync.so \
+  --dataset testdata/real_audio \
+  --out target/eval_gmm_test \
+  --gmm
+python3 scripts/compare_evaluations.py \
+  --baseline target/eval_default_test \
+  --candidate target/eval_gmm_test \
+  --out target/eval_compare
+```
+
+The comparison writes `compare_summary.json`, `confusion_delta.csv`, `per_label_metrics.csv`, and `error_breakdown.csv`. It reports top-1/top-2 deltas, raw-vowel versus final-class accuracy, raw-correct/final-wrong cases, REST/OTHER absorption, per-vowel precision and recall, pair confusions such as `I/E`, `U/O`, and `A/O`, and class-switch-rate delta.
+
 ## Feature Extractor
 
 The crate includes a `FeatureExtractor` and training CSV export for trained-model experiments. The debug C ABI exposes the current 16-band classifier space and the 31-dimensional feature vector separately. `scripts/export_training_csv.py` writes `label`, `file`, `time_seconds`, `eval_frame`, `band_*`, and `feature_*` columns; `scripts/train_gmm.py --feature-set band` trains from the 16-band space, and `scripts/export_gmm_rust.py` exports that model into `src/trained_band_gmm.rs`. The default `feature_` prefix remains for the 31-dimensional vector. The feature extractor produces:
