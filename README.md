@@ -73,6 +73,7 @@ Flags:
 1 << 1  Optional tiny NN
 1 << 2  Timed cues / metadata fusion
 1 << 3  Robust loudness handling
+1 << 4  Diagonal GMM classifier path
 ```
 
 ## C ABI
@@ -125,4 +126,4 @@ The evaluator reads mono or stereo PCM WAV files, downmixes to mono, runs the C 
 
 ## Classifier Notes
 
-The main vowel evidence path is multi-prototype normalized spectral matching over 16 log-energy bands, optionally blended with a tiny NN. Each vowel keeps the original hand-written prototype as a base and adds deterministic pitch, loudness, singing, and microphone-response variants. This is still not a trained GMM; real accuracy claims should come from the evaluation workflow. The classifier intentionally does not use F1/F2 polygon mapping. LPC/formants remain only as debug and auxiliary evidence. Compressed, clipped, and shouted voices use feature smoothing plus a weak broad vowel prior capped at 0.18 so mouth shape is preserved; compression mainly dampens confidence and stabilizes jaw opening instead of forcing an A-heavy distribution.
+The default vowel evidence path is multi-prototype normalized spectral matching over 16 log-energy bands, optionally blended with a tiny NN. A diagonal GMM infrastructure path is available with `LIPSYNC_FLAG_GMM`, currently seeded from the same hand-written prototype family until trained data is available. Each vowel keeps the original hand-written prototype as a base and adds deterministic pitch, loudness, singing, and microphone-response variants. The placeholder GMM is infrastructure only; real accuracy claims should come from the evaluation workflow and a trained exported model. The classifier intentionally does not use F1/F2 polygon mapping. LPC/formants remain only as debug and auxiliary evidence. Compressed, clipped, and shouted voices use feature smoothing plus a weak broad vowel prior capped at 0.18 so mouth shape is preserved; compression mainly dampens confidence and stabilizes jaw opening instead of forcing an A-heavy distribution.

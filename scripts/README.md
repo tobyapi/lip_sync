@@ -28,3 +28,18 @@ The evaluator writes:
 - `confusion_matrix.csv`: expected class by predicted class for labeled frames.
 
 No WAV files are required in the repository. Put local recordings under `testdata/real_audio` when measuring changes.
+
+## GMM training initializer
+
+`train_gmm.py` reads a CSV of finite feature columns and labels, groups rows by class, and exports a small diagonal-GMM JSON without external dependencies:
+
+```sh
+python3 scripts/train_gmm.py \
+  --input target/lipsync_eval/features.csv \
+  --label-column label \
+  --feature-prefix feature_ \
+  --mixtures 2 \
+  --out target/lipsync_eval/gmm.json
+```
+
+This is a lightweight initializer/export path, not an accuracy guarantee. It needs real labeled feature data from the evaluator before replacing the placeholder model.

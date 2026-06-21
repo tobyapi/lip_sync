@@ -1,4 +1,4 @@
-use crate::lpc;
+use crate::{gmm, lpc};
 use num_complex::Complex;
 use rustfft::FftPlanner;
 
@@ -9,6 +9,7 @@ pub const LIPSYNC_FLAG_SINGING_MODE: u32 = 1 << 0;
 pub const LIPSYNC_FLAG_TINY_NN: u32 = 1 << 1;
 pub const LIPSYNC_FLAG_TIMED_CUES: u32 = 1 << 2;
 pub const LIPSYNC_FLAG_ROBUST_LOUDNESS: u32 = 1 << 3;
+pub const LIPSYNC_FLAG_GMM: u32 = 1 << 4;
 
 const FRAME_SIZE: usize = 1024;
 const EPSILON: f32 = 1.0e-8;
@@ -333,6 +334,25 @@ impl LipSyncOptions {
     }
     pub fn robust_loudness_enabled(self) -> bool {
         self.flags & LIPSYNC_FLAG_ROBUST_LOUDNESS != 0
+    }
+    pub fn gmm_enabled(self) -> bool {
+        self.flags & LIPSYNC_FLAG_GMM != 0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VowelClassifierKind {
+    MultiPrototype,
+    DiagonalGmm,
+}
+
+impl VowelClassifierKind {
+    fn from_options(options: LipSyncOptions) -> Self {
+        if options.gmm_enabled() {
+            Self::DiagonalGmm
+        } else {
+            Self::MultiPrototype
+        }
     }
 }
 
@@ -676,7 +696,10 @@ pub fn analyze_vowel_evidence_with_options(
         };
     }
 
-    let mut scores = multi_prototype_scores(&profile.normalized_bands);
+    let mut scores = match VowelClassifierKind::from_options(options) {
+        VowelClassifierKind::MultiPrototype => multi_prototype_scores(&profile.normalized_bands),
+        VowelClassifierKind::DiagonalGmm => gmm_vowel_scores(&profile.normalized_bands),
+    };
     if options.tiny_nn_enabled() {
         let nn_scores = tiny_nn_scores(&profile);
         blend_distribution(&mut scores, &nn_scores, 0.35);
@@ -916,6 +939,11 @@ fn compensate_compressed_feature(
 
     normalize_feature(compensated)
 }
+fn gmm_vowel_scores(feature: &[f32; NUM_BANDS]) -> [f32; NUM_VOWELS] {
+    let model = gmm::placeholder_vowel_gmm();
+    model.posterior::<NUM_VOWELS>(feature)
+}
+
 fn multi_prototype_scores(feature: &[f32; NUM_BANDS]) -> [f32; NUM_VOWELS] {
     let mut logits = [0.0; NUM_VOWELS];
     for vowel_index in 0..NUM_VOWELS {
@@ -1265,6 +1293,23 @@ mod tests {
             let (best, second) = best_two(scores);
             assert!(best > second + 0.01, "scores were too uniform: {scores:?}");
         }
+    }
+
+    #[test]
+    fn gmm_classifier_can_be_selected_through_options() {
+        let options = LipSyncOptions {
+            sample_rate: SAMPLE_RATE,
+            flags: LIPSYNC_FLAG_ROBUST_LOUDNESS | LIPSYNC_FLAG_GMM,
+            ..LipSyncOptions::default()
+        };
+        assert_eq!(
+            VowelClassifierKind::from_options(options),
+            VowelClassifierKind::DiagonalGmm
+        );
+
+        let pcm = synthetic_vowel_like_signal(0.45, &[(120.0, 0.35), (720.0, 1.0), (1150.0, 0.75)]);
+        let scores = analyze_vowel_evidence_with_options(&pcm, options).scores;
+        assert_scores_normalized(scores);
     }
 
     #[test]

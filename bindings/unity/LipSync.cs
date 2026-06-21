@@ -15,7 +15,8 @@ namespace TobyApi.LipSync
         SingingMode = 1 << 0,
         TinyNn = 1 << 1,
         TimedCues = 1 << 2,
-        RobustLoudness = 1 << 3
+        RobustLoudness = 1 << 3,
+        Gmm = 1 << 4
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -27,13 +28,14 @@ namespace TobyApi.LipSync
         public float smoothing;
         public float loudnessAdaptation;
 
-        public static LipSyncOptions Create(int sampleRate, bool singingMode, bool tinyNn, bool timedCues, bool robustLoudness)
+        public static LipSyncOptions Create(int sampleRate, bool singingMode, bool tinyNn, bool timedCues, bool robustLoudness, bool gmm = false)
         {
             LipSyncOptionsFlags flags = LipSyncOptionsFlags.None;
             if (singingMode) flags |= LipSyncOptionsFlags.SingingMode;
             if (tinyNn) flags |= LipSyncOptionsFlags.TinyNn;
             if (timedCues) flags |= LipSyncOptionsFlags.TimedCues;
             if (robustLoudness) flags |= LipSyncOptionsFlags.RobustLoudness;
+            if (gmm) flags |= LipSyncOptionsFlags.Gmm;
 
             return new LipSyncOptions
             {

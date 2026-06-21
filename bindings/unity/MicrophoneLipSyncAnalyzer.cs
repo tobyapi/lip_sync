@@ -15,6 +15,7 @@ namespace TobyApi.LipSync
         [SerializeField, Range(0.02f, 0.25f)] private float analysisIntervalSeconds = 0.05f;
         [SerializeField] private bool singingMode;
         [SerializeField] private bool enableTinyNn;
+        [SerializeField] private bool enableGmm;
         [SerializeField] private bool robustLoudness = true;
         [SerializeField] private bool useAudioSourceTimeForTimedCues = true;
         [SerializeField, Range(0f, 1f)] private float metadataWeight = 0.55f;
@@ -141,7 +142,7 @@ namespace TobyApi.LipSync
 
         private LipSyncOptions BuildOptions(int sampleRate)
         {
-            LipSyncOptions options = LipSyncOptions.Create(sampleRate, singingMode, enableTinyNn, pendingTimedCues != null && pendingTimedCues.Length > 0, robustLoudness);
+            LipSyncOptions options = LipSyncOptions.Create(sampleRate, singingMode, enableTinyNn, pendingTimedCues != null && pendingTimedCues.Length > 0, robustLoudness, enableGmm);
             options.metadataWeight = metadataWeight;
             options.smoothing = singingMode ? Mathf.Max(smoothing, 0.55f) : smoothing;
             options.loudnessAdaptation = loudnessAdaptation;

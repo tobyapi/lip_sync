@@ -1,3 +1,4 @@
+pub mod gmm;
 pub mod lpc;
 pub mod vowel;
 
