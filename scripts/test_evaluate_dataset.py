@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Unit tests for evaluate_dataset helper logic."""
 
+import csv
 import importlib.util
 from pathlib import Path
+import tempfile
 import unittest
 
 SCRIPT = Path(__file__).with_name("evaluate_dataset.py")
@@ -83,6 +85,50 @@ class SummaryMathTests(unittest.TestCase):
 
 
 class FeatureColumnTests(unittest.TestCase):
+    def test_write_outputs_includes_gmm_model_kind(self):
+        posterior = [0.0 for _ in evaluate_dataset.CLASS_NAMES]
+        posterior[evaluate_dataset.CLASS_TO_INDEX["A"]] = 1.0
+        rows = [
+            {
+                "file": "a.wav",
+                "time_seconds": 0.0,
+                "sample_rate": 16_000,
+                "label": "A",
+                "best_class": "A",
+                "top2": "A|I",
+                "eval_frame": True,
+                "jaw_open": 0.5,
+                "vowel_confidence": 1.0,
+                "f1_hz": 0.0,
+                "f2_hz": 0.0,
+                "entropy": 0.0,
+                "classifier_kind": evaluate_dataset.LIPSYNC_FLAG_GMM,
+                "gmm_model_kind": 1,
+                "band_feature_space": evaluate_dataset.NUM_BANDS,
+                "feature_vector_space": evaluate_dataset.FEATURE_VECTOR_LEN,
+                "posterior": posterior,
+                "vowel_scores": [1.0, 0.0, 0.0, 0.0, 0.0],
+                "band_features": [0.0 for _ in range(evaluate_dataset.NUM_BANDS)],
+                "feature_vector": [0.0 for _ in range(evaluate_dataset.FEATURE_VECTOR_LEN)],
+                "activity": 1.0,
+                "rms": 0.1,
+                "high_ratio": 0.0,
+                "zcr": 0.0,
+                "flatness": 0.0,
+                "compression_likelihood": 0.0,
+                "raw_best_vowel": "A",
+            }
+        ]
+        summary = evaluate_dataset.compute_summary(rows)
+        with tempfile.TemporaryDirectory() as directory:
+            out_dir = Path(directory)
+            evaluate_dataset.write_outputs(rows, summary, out_dir)
+            with (out_dir / "frames.csv").open(newline="", encoding="utf-8") as handle:
+                output_rows = list(csv.DictReader(handle))
+
+        self.assertEqual(summary["gmm_model_kind"], 1)
+        self.assertEqual(summary["gmm_model_kind_counts"], {"1": 1})
+        self.assertEqual(output_rows[0]["gmm_model_kind"], "1")
     def test_feature_column_dimensions_are_stable(self):
         self.assertEqual(evaluate_dataset.NUM_BANDS, 16)
         self.assertEqual(evaluate_dataset.FEATURE_VECTOR_LEN, 31)

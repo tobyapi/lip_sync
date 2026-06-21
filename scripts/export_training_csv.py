@@ -26,7 +26,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--gmm",
         action="store_true",
-        help="Enable the trained 16-band spectral GMM path, with placeholder fallback when no model is generated",
+        help="Enable the trained 16-band spectral GMM path; placeholder fallback reports gmm_model_kind=1",
     )
     parser.add_argument("--no-robust-loudness", dest="robust_loudness", action="store_false", help="Disable robust loudness flag")
     parser.set_defaults(robust_loudness=True)

@@ -47,6 +47,8 @@ class ExportGmmRustTests(unittest.TestCase):
         self.assertIn('TRAINED_BAND_GMM_CLASSES: [&str; 5]', output)
         self.assertIn('TRAINED_BAND_GMM_FEATURES: usize = 16', output)
         self.assertIn('TRAINED_BAND_GMM_MEANS: [f32; 80]', output)
+        self.assertIn('GMM_MODEL_KIND_TRAINED: u32 = 2', output)
+        self.assertIn('pub fn trained_band_vowel_gmm_model_kind() -> u32', output)
         self.assertIn('pub fn trained_band_vowel_gmm() -> DiagonalGmm', output)
 
     def test_rejects_non_band_feature_prefix(self):

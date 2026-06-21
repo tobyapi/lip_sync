@@ -20,7 +20,7 @@ spec.loader.exec_module(compare_evaluations)
 CLASS_NAMES = compare_evaluations.CLASS_NAMES
 
 
-def frame(label, best_class, top2, raw_best_vowel, time_seconds):
+def frame(label, best_class, top2, raw_best_vowel, time_seconds, gmm_model_kind=0):
     return {
         "file": f"{label.lower()}.wav",
         "time_seconds": f"{time_seconds:.2f}",
@@ -29,6 +29,7 @@ def frame(label, best_class, top2, raw_best_vowel, time_seconds):
         "top2": top2,
         "eval_frame": "True",
         "raw_best_vowel": raw_best_vowel,
+        "gmm_model_kind": str(gmm_model_kind),
     }
 
 
@@ -46,7 +47,7 @@ def write_eval_dir(path: Path, frames, summary):
     with (path / "frames.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["file", "time_seconds", "label", "best_class", "top2", "eval_frame", "raw_best_vowel"],
+            fieldnames=["file", "time_seconds", "label", "best_class", "top2", "eval_frame", "raw_best_vowel", "gmm_model_kind"],
         )
         writer.writeheader()
         writer.writerows(frames)
@@ -70,12 +71,12 @@ class CompareEvaluationTests(unittest.TestCase):
             frame("REST", "REST", "REST|OTHER", "", 0.10),
         ]
         candidate_frames = [
-            frame("A", "A", "A|O", "A", 0.00),
-            frame("I", "I", "I|E", "I", 0.02),
-            frame("U", "O", "O|U", "O", 0.04),
-            frame("O", "O", "O|A", "O", 0.06),
-            frame("E", "E", "E|A", "A", 0.08),
-            frame("REST", "REST", "REST|OTHER", "", 0.10),
+            frame("A", "A", "A|O", "A", 0.00, 2),
+            frame("I", "I", "I|E", "I", 0.02, 2),
+            frame("U", "O", "O|U", "O", 0.04, 2),
+            frame("O", "O", "O|A", "O", 0.06, 2),
+            frame("E", "E", "E|A", "A", 0.08, 2),
+            frame("REST", "REST", "REST|OTHER", "", 0.10, 2),
         ]
         baseline_summary = {
             "vowel_top1_accuracy": 0.4,
@@ -114,6 +115,10 @@ class CompareEvaluationTests(unittest.TestCase):
         self.assertAlmostEqual(report["delta"]["class_switches_per_second"], -0.5)
         self.assertAlmostEqual(report["baseline"]["raw_best_vowel_accuracy"], 0.4)
         self.assertAlmostEqual(report["candidate"]["final_best_class_accuracy"], 5 / 6)
+        self.assertEqual(report["baseline"]["gmm_model_kind"], 0)
+        self.assertEqual(report["baseline"]["gmm_model_kind_counts"], {"0": 6})
+        self.assertEqual(report["candidate"]["gmm_model_kind"], 2)
+        self.assertEqual(report["candidate"]["gmm_model_kind_counts"], {"2": 6})
         self.assertEqual(report["baseline"]["raw_correct_but_final_wrong_count"], 1)
         self.assertEqual(report["candidate"]["raw_wrong_but_final_correct_count"], 1)
         self.assertAlmostEqual(report["baseline"]["other_absorption_rate"], 0.2)

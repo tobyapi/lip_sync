@@ -125,7 +125,7 @@ Important Unity options:
 - `singingMode`: smoother transitions and jaw movement for sustained vocals.
 - `enableTinyNn`: blends the optional tiny NN with prototype matching.
 - `robustLoudness`: enables shout/compressor-oriented normalization and adaptive gates.
-- `enableGmm`: default off; enables the trained 16-band spectral GMM path, falling back to the placeholder model if no generated arrays are present.
+- `enableGmm`: default off; `LIPSYNC_FLAG_GMM` selects the trained 16-band spectral GMM path; falls back to placeholder if generated arrays are empty.
 - `metadataWeight`: controls TTS/lyric timed cue influence.
 - `useAudioSourceTimeForTimedCues`: uses `AudioSource.time` for metadata lookup.
 
@@ -141,7 +141,7 @@ python3 scripts/evaluate_dataset.py \
   --out target/lipsync_eval
 ```
 
-The evaluator reads mono or stereo PCM WAV files, downmixes to mono, runs the debug C ABI with configurable chunks, and writes `frames.csv`, `summary.json`, and `confusion_matrix.csv`. The per-frame CSV includes final posterior columns `p_rest` through `p_other`, raw vowel scores `vowel_scores_a` through `vowel_scores_o`, `band_00` through `band_15`, `feature_00` through `feature_30`, feature-space ids, `vowel_confidence`, `activity`, `rms`, `high_ratio`, `zcr`, `flatness`, `compression_likelihood`, and `raw_best_vowel`. The summary includes vowel top-1/top-2 accuracy, rest rejection, fricative and closed detection when labels exist, average jaw opening, class switches per second, and mean posterior entropy. The optional `--gmm` flag evaluates the trained 16-band vowel GMM after `src/trained_band_gmm.rs` has been generated. If the generated arrays are empty, the SDK falls back to the clearly marked placeholder model, which is not an accuracy model.
+The evaluator reads mono or stereo PCM WAV files, downmixes to mono, runs the debug C ABI with configurable chunks, and writes `frames.csv`, `summary.json`, and `confusion_matrix.csv`. The per-frame CSV includes final posterior columns `p_rest` through `p_other`, raw vowel scores `vowel_scores_a` through `vowel_scores_o`, `band_00` through `band_15`, `feature_00` through `feature_30`, feature-space ids, `gmm_model_kind`, `vowel_confidence`, `activity`, `rms`, `high_ratio`, `zcr`, `flatness`, `compression_likelihood`, and `raw_best_vowel`. The summary includes vowel top-1/top-2 accuracy, rest rejection, fricative and closed detection when labels exist, average jaw opening, class switches per second, mean posterior entropy, and GMM model kind counts. The optional `--gmm` flag evaluates the trained 16-band vowel GMM after `src/trained_band_gmm.rs` has been generated. Accuracy claims require `gmm_model_kind == 2` (`trained`); `gmm_model_kind == 1` is the placeholder fallback, kept only so the build works before a generated model exists.
 
 ## Training a 16-Band GMM
 
@@ -192,7 +192,7 @@ python3 scripts/compare_evaluations.py \
   --out target/eval_compare
 ```
 
-The comparison writes `compare_summary.json`, `confusion_delta.csv`, `per_label_metrics.csv`, and `error_breakdown.csv`. It reports top-1/top-2 deltas, raw-vowel versus final-class accuracy, raw-correct/final-wrong cases, REST/OTHER absorption, per-vowel precision and recall, pair confusions such as `I/E`, `U/O`, and `A/O`, and class-switch-rate delta.
+The comparison writes `compare_summary.json`, `confusion_delta.csv`, `per_label_metrics.csv`, and `error_breakdown.csv`. It reports top-1/top-2 deltas, raw-vowel versus final-class accuracy, raw-correct/final-wrong cases, REST/OTHER absorption, per-vowel precision and recall, pair confusions such as `I/E`, `U/O`, and `A/O`, class-switch-rate delta, and any available `gmm_model_kind` counts from `frames.csv`.
 
 ## Feature Extractor
 
@@ -223,4 +223,4 @@ The active analyzer uses a rolling loudness tracker to estimate a noise floor, s
 
 ## Classifier Notes
 
-The default vowel evidence path is multi-prototype normalized spectral matching over 16 log-energy bands, optionally blended with a tiny NN. `LIPSYNC_FLAG_GMM` loads `trained_band_vowel_gmm()`, which consumes the same 16-band spectral feature space. If no generated trained arrays are present, it falls back to the hand-written placeholder GMM; that fallback is not an accuracy-improvement mode and should not be used for accuracy claims. Each vowel keeps the original hand-written prototype as a base and adds deterministic pitch, loudness, singing, and microphone-response variants. The classifier intentionally does not use F1/F2 polygon mapping. LPC/formants remain only as debug and auxiliary evidence. Compressed, clipped, and shouted voices use feature smoothing plus a weak broad vowel prior capped at 0.18 so mouth shape is preserved; compression mainly dampens confidence and stabilizes jaw opening instead of forcing an A-heavy distribution.
+The default vowel evidence path is multi-prototype normalized spectral matching over 16 log-energy bands, optionally blended with a tiny NN. `LIPSYNC_FLAG_GMM` selects the trained 16-band spectral GMM path; falls back to placeholder if generated arrays are empty. The debug/evaluation `gmm_model_kind` field is `0` when GMM is not used, `1` for placeholder fallback, and `2` for a generated trained model. Accuracy claims require `gmm_model_kind == 2`; placeholder fallback is only for buildability before the first real model is exported. Each vowel keeps the original hand-written prototype as a base and adds deterministic pitch, loudness, singing, and microphone-response variants. The classifier intentionally does not use F1/F2 polygon mapping. LPC/formants remain only as debug and auxiliary evidence. Compressed, clipped, and shouted voices use feature smoothing plus a weak broad vowel prior capped at 0.18 so mouth shape is preserved; compression mainly dampens confidence and stabilizes jaw opening instead of forcing an A-heavy distribution.

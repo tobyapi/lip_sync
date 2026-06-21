@@ -17,6 +17,9 @@ pub const LIPSYNC_FLAG_ROBUST_LOUDNESS: u32 = 1 << 3;
 pub const LIPSYNC_FLAG_GMM: u32 = 1 << 4;
 pub const LIPSYNC_CLASSIFIER_MULTI_PROTOTYPE: u32 = 0;
 pub const LIPSYNC_CLASSIFIER_DIAGONAL_GMM: u32 = 1;
+pub const LIPSYNC_GMM_MODEL_KIND_NOT_USED: u32 = trained_band_gmm::GMM_MODEL_KIND_NOT_USED;
+pub const LIPSYNC_GMM_MODEL_KIND_PLACEHOLDER: u32 = trained_band_gmm::GMM_MODEL_KIND_PLACEHOLDER;
+pub const LIPSYNC_GMM_MODEL_KIND_TRAINED: u32 = trained_band_gmm::GMM_MODEL_KIND_TRAINED;
 pub const LIPSYNC_FEATURE_SPACE_BANDS_16: u32 = 16;
 pub const LIPSYNC_FEATURE_SPACE_VECTOR_31: u32 = 31;
 
@@ -389,6 +392,13 @@ impl VowelClassifierKind {
             Self::DiagonalGmm => LIPSYNC_CLASSIFIER_DIAGONAL_GMM,
         }
     }
+
+    fn gmm_model_kind(self) -> u32 {
+        match self {
+            Self::MultiPrototype => LIPSYNC_GMM_MODEL_KIND_NOT_USED,
+            Self::DiagonalGmm => trained_band_gmm::trained_band_vowel_gmm_model_kind(),
+        }
+    }
 }
 
 #[repr(C)]
@@ -497,6 +507,7 @@ pub struct LipSyncDebugFrame {
     pub normalized_bands: [f32; NUM_BANDS],
     pub feature_vector: [f32; FEATURE_VECTOR_LEN],
     pub classifier_kind: u32,
+    pub gmm_model_kind: u32,
     pub band_feature_space: u32,
     pub feature_vector_space: u32,
     pub activity: f32,
@@ -516,6 +527,7 @@ impl Default for LipSyncDebugFrame {
             normalized_bands: [0.0; NUM_BANDS],
             feature_vector: [0.0; FEATURE_VECTOR_LEN],
             classifier_kind: LIPSYNC_CLASSIFIER_MULTI_PROTOTYPE,
+            gmm_model_kind: LIPSYNC_GMM_MODEL_KIND_NOT_USED,
             band_feature_space: LIPSYNC_FEATURE_SPACE_BANDS_16,
             feature_vector_space: LIPSYNC_FEATURE_SPACE_VECTOR_31,
             activity: 0.0,
@@ -544,6 +556,7 @@ impl LipSyncDebugFrame {
             normalized_bands: profile.normalized_bands,
             feature_vector: feature_values_array(feature_vector),
             classifier_kind: classifier_kind.as_u32(),
+            gmm_model_kind: classifier_kind.gmm_model_kind(),
             band_feature_space: LIPSYNC_FEATURE_SPACE_BANDS_16,
             feature_vector_space: LIPSYNC_FEATURE_SPACE_VECTOR_31,
             activity,
@@ -784,7 +797,7 @@ impl LipSyncAnalyzer {
         let hop_samples = self.analysis_hop_samples();
         if !self.stream.has_enough_samples(window_samples) {
             self.latest_frame = LipSyncFrame::default();
-            self.latest_debug_frame = LipSyncDebugFrame::default();
+            self.latest_debug_frame = self.default_debug_frame_for_options();
             return self.latest_debug_frame;
         }
 
@@ -796,6 +809,13 @@ impl LipSyncAnalyzer {
         self.latest_debug_frame
     }
 
+    fn default_debug_frame_for_options(&self) -> LipSyncDebugFrame {
+        let classifier_kind = VowelClassifierKind::from_options(self.options);
+        let mut frame = LipSyncDebugFrame::default();
+        frame.classifier_kind = classifier_kind.as_u32();
+        frame.gmm_model_kind = classifier_kind.gmm_model_kind();
+        frame
+    }
     fn analysis_window_samples(&self) -> usize {
         let window_ms = if self.options.singing_mode() {
             SINGING_WINDOW_MS

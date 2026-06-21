@@ -158,6 +158,26 @@ def error_category_counts(rows: list[dict[str, str]]) -> dict[str, int]:
     return counts
 
 
+
+def gmm_model_kind_counts(rows: list[dict[str, str]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        raw_value = row.get("gmm_model_kind", "")
+        if str(raw_value).strip() == "":
+            continue
+        try:
+            key = str(int(raw_value))
+        except ValueError:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def single_gmm_model_kind(counts: dict[str, int]) -> int | None:
+    if len(counts) != 1:
+        return None
+    return int(next(iter(counts)))
+
 def compute_metrics(evaluation: dict[str, object]) -> dict[str, object]:
     summary = evaluation["summary"]
     confusion = evaluation["confusion"]
@@ -180,6 +200,7 @@ def compute_metrics(evaluation: dict[str, object]) -> dict[str, object]:
     pair_confusions = {
         f"{first}_{second}": confusion_pair_count(confusion, first, second) for first, second in CONFUSION_PAIRS
     }
+    gmm_counts = gmm_model_kind_counts(rows)
 
     return {
         "path": evaluation["path"],
@@ -187,6 +208,8 @@ def compute_metrics(evaluation: dict[str, object]) -> dict[str, object]:
         "vowel_frames": len(vowel_rows),
         "vowel_top1_accuracy": parse_float(summary.get("vowel_top1_accuracy")),
         "vowel_top2_accuracy": parse_float(summary.get("vowel_top2_accuracy")),
+        "gmm_model_kind": single_gmm_model_kind(gmm_counts),
+        "gmm_model_kind_counts": gmm_counts,
         "class_switches_per_second": parse_float(summary.get("class_switches_per_second")),
         "raw_best_vowel_accuracy": ratio(raw_correct, len(vowel_rows)),
         "final_best_class_accuracy": ratio(final_all_correct, len(rows)),

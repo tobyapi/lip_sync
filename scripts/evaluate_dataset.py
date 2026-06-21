@@ -87,6 +87,7 @@ class LipSyncDebugFrame(ctypes.Structure):
         ("normalized_bands", ctypes.c_float * NUM_BANDS),
         ("feature_vector", ctypes.c_float * FEATURE_VECTOR_LEN),
         ("classifier_kind", ctypes.c_uint32),
+        ("gmm_model_kind", ctypes.c_uint32),
         ("band_feature_space", ctypes.c_uint32),
         ("feature_vector_space", ctypes.c_uint32),
         ("activity", ctypes.c_float),
@@ -308,6 +309,7 @@ def process_file(library, path: Path, label: str, args: argparse.Namespace) -> l
                     "band_features": band_features,
                     "feature_vector": feature_vector,
                     "classifier_kind": int(debug.classifier_kind),
+                    "gmm_model_kind": int(debug.gmm_model_kind),
                     "band_feature_space": int(debug.band_feature_space),
                     "feature_vector_space": int(debug.feature_vector_space),
                     "activity": float(debug.activity),
@@ -333,6 +335,23 @@ def fraction(numerator: int, denominator: int) -> float | None:
         return None
     return numerator / denominator
 
+
+
+def gmm_model_kind_counts(rows: list[dict[str, object]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = row.get("gmm_model_kind")
+        if value is None or value == "":
+            continue
+        key = str(int(value))
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def single_gmm_model_kind(counts: dict[str, int]) -> int | None:
+    if len(counts) != 1:
+        return None
+    return int(next(iter(counts)))
 
 def compute_summary(rows: list[dict[str, object]]) -> dict[str, object]:
     eval_rows = [row for row in rows if row.get("eval_frame")]
@@ -365,6 +384,7 @@ def compute_summary(rows: list[dict[str, object]]) -> dict[str, object]:
     confusion = {label: {name: 0 for name in CLASS_NAMES} for label in CLASS_NAMES}
     for row in eval_rows:
         confusion[str(row["label"])][str(row["best_class"])] += 1
+    gmm_counts = gmm_model_kind_counts(eval_rows)
 
     return {
         "files": len(rows_by_file),
@@ -379,6 +399,8 @@ def compute_summary(rows: list[dict[str, object]]) -> dict[str, object]:
         "average_jaw_open": sum(float(row["jaw_open"]) for row in eval_rows) / len(eval_rows),
         "class_switches_per_second": fraction(switches, total_duration),
         "mean_posterior_entropy": sum(float(row["entropy"]) for row in eval_rows) / len(eval_rows),
+        "gmm_model_kind": single_gmm_model_kind(gmm_counts),
+        "gmm_model_kind_counts": gmm_counts,
         "confusion_matrix": confusion,
     }
 
@@ -400,6 +422,7 @@ def write_outputs(rows: list[dict[str, object]], summary: dict[str, object], out
         "f2_hz",
         "entropy",
         "classifier_kind",
+        "gmm_model_kind",
         "band_feature_space",
         "feature_vector_space",
     ] + [f"p_{name.lower()}" for name in CLASS_NAMES] + [
@@ -445,7 +468,7 @@ def write_outputs(rows: list[dict[str, object]], summary: dict[str, object], out
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Evaluate lip_sync on labeled WAV clips.",
-        epilog="Note: --gmm evaluates the trained 16-band spectral GMM after src/trained_band_gmm.rs is generated. Empty generated arrays fall back to the placeholder model.",
+        epilog="Note: accuracy claims for --gmm require gmm_model_kind=2 in frames.csv. gmm_model_kind=1 is the placeholder buildability fallback.",
     )
     parser.add_argument("--library", required=True, type=Path, help="Path to compiled lip_sync native library")
     parser.add_argument("--dataset", required=True, type=Path, help="Path to testdata/real_audio dataset")
@@ -457,7 +480,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--gmm",
         action="store_true",
-        help="Enable the trained 16-band spectral GMM path, with placeholder fallback when no model is generated",
+        help="Enable the trained 16-band spectral GMM path; placeholder fallback reports gmm_model_kind=1",
     )
     parser.add_argument("--no-robust-loudness", dest="robust_loudness", action="store_false", help="Disable robust loudness flag")
     parser.set_defaults(robust_loudness=True)

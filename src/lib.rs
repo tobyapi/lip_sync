@@ -453,7 +453,8 @@ pub extern "C" fn lipsync_destroy(analyzer: *mut LipSyncAnalyzer) {
 mod tests {
     use super::*;
     use crate::vowel::{
-        LIPSYNC_FLAG_ROBUST_LOUDNESS, LIPSYNC_FLAG_TIMED_CUES, LipSyncClass, LipSyncCueKind,
+        LIPSYNC_FLAG_GMM, LIPSYNC_FLAG_ROBUST_LOUDNESS, LIPSYNC_FLAG_TIMED_CUES, LipSyncClass,
+        LipSyncCueKind,
     };
 
     #[test]
@@ -493,11 +494,42 @@ mod tests {
         );
         assert!(frame.normalized_bands.iter().all(|value| value.is_finite()));
         assert!(frame.feature_vector.iter().all(|value| value.is_finite()));
+        assert_eq!(
+            frame.gmm_model_kind,
+            crate::vowel::LIPSYNC_GMM_MODEL_KIND_NOT_USED
+        );
         assert_eq!(frame.raw_best_vowel, -1);
 
         lipsync_destroy(analyzer);
     }
 
+    #[test]
+    fn lipsync_c_abi_debug_reports_placeholder_gmm_model_kind() {
+        let analyzer = lipsync_create_with_options(LipSyncOptions {
+            sample_rate: 44_100,
+            flags: LIPSYNC_FLAG_ROBUST_LOUDNESS | LIPSYNC_FLAG_GMM,
+            metadata_weight: 0.0,
+            smoothing: 0.18,
+            loudness_adaptation: 0.07,
+        });
+        assert!(!analyzer.is_null());
+
+        let pcm = vec![0.0; 2048];
+        let mut frame = LipSyncDebugFrame::default();
+        let ok = lipsync_process_debug(analyzer, pcm.as_ptr(), pcm.len(), &mut frame);
+
+        assert!(ok);
+        assert_eq!(
+            frame.classifier_kind,
+            crate::vowel::LIPSYNC_CLASSIFIER_DIAGONAL_GMM
+        );
+        assert_eq!(
+            frame.gmm_model_kind,
+            crate::vowel::LIPSYNC_GMM_MODEL_KIND_PLACEHOLDER
+        );
+
+        lipsync_destroy(analyzer);
+    }
     #[test]
     fn lipsync_c_abi_extracts_training_features() {
         let pcm = vec![0.02; 1024];
