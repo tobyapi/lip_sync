@@ -1,6 +1,7 @@
 pub mod features;
 pub mod gmm;
 pub mod lpc;
+pub mod normalization;
 pub mod vowel;
 
 use crate::vowel::{

@@ -1,4 +1,8 @@
-use crate::{features::FeatureExtractor, gmm, lpc};
+use crate::{
+    features::FeatureExtractor,
+    gmm, lpc,
+    normalization::{CmvnUpdateGate, RollingCmvn, RollingLoudness},
+};
 use num_complex::Complex;
 use rustfft::FftPlanner;
 
@@ -439,6 +443,8 @@ pub struct LipSyncAnalyzer {
     current_time_seconds: f32,
     timed_cues: Vec<LipSyncTimedCue>,
     feature_extractor: FeatureExtractor,
+    cmvn: RollingCmvn,
+    rolling_loudness: RollingLoudness,
 }
 
 impl LipSyncAnalyzer {
@@ -465,6 +471,8 @@ impl LipSyncAnalyzer {
             current_time_seconds: 0.0,
             timed_cues: Vec::new(),
             feature_extractor: FeatureExtractor::new(),
+            cmvn: RollingCmvn::default(),
+            rolling_loudness: RollingLoudness::new(),
         }
     }
 
@@ -491,19 +499,21 @@ impl LipSyncAnalyzer {
     }
 
     pub fn process_at_time(&mut self, pcm_data: &[f32], time_seconds: f32) -> LipSyncFrame {
-        let gmm_features = if self.options.gmm_enabled() {
-            Some(
-                self.feature_extractor
-                    .extract(pcm_data, self.options.sample_rate)
-                    .values,
-            )
+        let mut extracted_features = None;
+        let classifier_features = if self.options.gmm_enabled() {
+            let features = self
+                .feature_extractor
+                .extract(pcm_data, self.options.sample_rate);
+            let normalized = self.cmvn.normalize(&features.values);
+            extracted_features = Some(features);
+            Some(normalized)
         } else {
             None
         };
         let evidence = analyze_vowel_evidence_with_classifier_features(
             pcm_data,
             self.options,
-            gmm_features.as_deref(),
+            classifier_features.as_deref(),
         );
         let profile = analyze_spectral_profile(pcm_data, self.options);
         self.update_loudness_trackers(&profile);
@@ -566,8 +576,10 @@ impl LipSyncAnalyzer {
             smooth_distribution(&mut posterior, &self.previous_posterior, smoothing);
         }
 
-        let normalized_loudness =
-            (profile.rms / (self.rolling_rms + EPSILON)).clamp(0.0, 2.0) / 2.0;
+        let normalized_loudness = self
+            .rolling_loudness
+            .state_for(profile.rms)
+            .normalized_level_01;
         let mut jaw_open = ((0.55 * openness + 0.45 * normalized_loudness)
             * (1.0 - posterior[LipSyncClass::Rest as usize])
             * (1.0 - posterior[LipSyncClass::Closed as usize] * 0.5))
@@ -591,6 +603,17 @@ impl LipSyncAnalyzer {
             f1_hz: evidence.f1_hz,
             f2_hz: evidence.f2_hz,
         };
+        if let Some(features) = extracted_features.as_ref() {
+            self.cmvn.update_if_reliable(
+                &features.values,
+                CmvnUpdateGate {
+                    voiced_confidence: features.voiced_confidence,
+                    rest_score: frame.posterior[LipSyncClass::Rest as usize],
+                    fricative_score: frame.posterior[LipSyncClass::Fricative as usize],
+                    compression_likelihood: profile.compression_likelihood,
+                },
+            );
+        }
         self.remember_frame(&frame);
         frame
     }
@@ -609,6 +632,7 @@ impl LipSyncAnalyzer {
         self.rolling_noise_floor = (self.rolling_noise_floor * (1.0 - noise_weight)
             + candidate_noise * noise_weight)
             .clamp(SILENCE_RMS, 0.02);
+        self.rolling_loudness.update(profile.rms, activity > 0.2);
     }
 
     fn activity_score(&self, profile: &SpectralProfile) -> f32 {
