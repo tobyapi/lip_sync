@@ -273,7 +273,7 @@ pub enum Vowel {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LipSyncClass {
     Rest = 0,
     Closed = 1,
@@ -445,6 +445,10 @@ pub struct LipSyncAnalyzer {
     feature_extractor: FeatureExtractor,
     cmvn: RollingCmvn,
     rolling_loudness: RollingLoudness,
+    current_class: LipSyncClass,
+    hold_time_seconds: f32,
+    previous_time_step_seconds: f32,
+    last_switch_confidence: f32,
 }
 
 impl LipSyncAnalyzer {
@@ -473,6 +477,10 @@ impl LipSyncAnalyzer {
             feature_extractor: FeatureExtractor::new(),
             cmvn: RollingCmvn::default(),
             rolling_loudness: RollingLoudness::new(),
+            current_class: LipSyncClass::Rest,
+            hold_time_seconds: 0.0,
+            previous_time_step_seconds: 0.0,
+            last_switch_confidence: 1.0,
         }
     }
 
@@ -499,6 +507,7 @@ impl LipSyncAnalyzer {
     }
 
     pub fn process_at_time(&mut self, pcm_data: &[f32], time_seconds: f32) -> LipSyncFrame {
+        let time_step_seconds = self.time_step_seconds(pcm_data);
         let mut extracted_features = None;
         let classifier_features = if self.options.gmm_enabled() {
             let features = self
@@ -530,6 +539,7 @@ impl LipSyncAnalyzer {
                 self.apply_timed_cues(&mut frame.posterior, time_seconds);
                 frame.jaw_open = jaw_open_from_posterior(frame.posterior, 0.0);
             }
+            self.remember_rest_temporal(time_step_seconds);
             self.remember_frame(&frame);
             return frame;
         }
@@ -576,6 +586,8 @@ impl LipSyncAnalyzer {
             smooth_distribution(&mut posterior, &self.previous_posterior, smoothing);
         }
 
+        self.apply_temporal_state(&mut posterior, time_step_seconds);
+
         let normalized_loudness = self
             .rolling_loudness
             .state_for(profile.rms)
@@ -616,6 +628,47 @@ impl LipSyncAnalyzer {
         }
         self.remember_frame(&frame);
         frame
+    }
+
+    fn time_step_seconds(&mut self, pcm_data: &[f32]) -> f32 {
+        let dt = (pcm_data.len() as f32 / self.options.sample_rate as f32).clamp(0.005, 0.12);
+        self.previous_time_step_seconds = dt;
+        dt
+    }
+
+    fn remember_rest_temporal(&mut self, time_step_seconds: f32) {
+        if self.current_class == LipSyncClass::Rest {
+            self.hold_time_seconds += time_step_seconds;
+        } else {
+            self.current_class = LipSyncClass::Rest;
+            self.hold_time_seconds = 0.0;
+            self.last_switch_confidence = 1.0;
+        }
+    }
+
+    fn apply_temporal_state(&mut self, posterior: &mut [f32; NUM_CLASSES], time_step_seconds: f32) {
+        let candidate = best_class(posterior);
+        let margin = class_switch_margin(posterior, self.current_class);
+        let min_hold = minimum_hold_seconds(self.current_class, self.options.singing_mode());
+        let threshold =
+            switch_margin_threshold(self.current_class, candidate, self.options.singing_mode());
+
+        self.hold_time_seconds += time_step_seconds;
+        if candidate != self.current_class
+            && self.hold_time_seconds >= min_hold
+            && margin >= threshold
+        {
+            self.current_class = candidate;
+            self.hold_time_seconds = 0.0;
+            self.last_switch_confidence = posterior[candidate as usize];
+        }
+
+        apply_temporal_bias(
+            posterior,
+            self.current_class,
+            candidate,
+            self.options.singing_mode(),
+        );
     }
 
     fn remember_frame(&mut self, frame: &LipSyncFrame) {
@@ -1154,6 +1207,107 @@ fn smooth_distribution(
     normalize_distribution(scores);
 }
 
+fn best_class(posterior: &[f32; NUM_CLASSES]) -> LipSyncClass {
+    let mut best_index = 0;
+    let mut best_score = posterior[0];
+    for (index, score) in posterior.iter().enumerate().skip(1) {
+        if *score > best_score {
+            best_index = index;
+            best_score = *score;
+        }
+    }
+    class_from_index(best_index)
+}
+
+fn class_switch_margin(posterior: &[f32; NUM_CLASSES], current: LipSyncClass) -> f32 {
+    let candidate = best_class(posterior);
+    posterior[candidate as usize] - posterior[current as usize]
+}
+
+fn class_from_index(index: usize) -> LipSyncClass {
+    match index {
+        1 => LipSyncClass::Closed,
+        2 => LipSyncClass::A,
+        3 => LipSyncClass::I,
+        4 => LipSyncClass::U,
+        5 => LipSyncClass::E,
+        6 => LipSyncClass::O,
+        7 => LipSyncClass::Fricative,
+        8 => LipSyncClass::Other,
+        _ => LipSyncClass::Rest,
+    }
+}
+
+fn minimum_hold_seconds(class: LipSyncClass, singing_mode: bool) -> f32 {
+    match class {
+        LipSyncClass::Rest => 0.03,
+        LipSyncClass::Closed => 0.04,
+        LipSyncClass::Fricative => 0.05,
+        LipSyncClass::A | LipSyncClass::I | LipSyncClass::U | LipSyncClass::E | LipSyncClass::O => {
+            if singing_mode {
+                0.09
+            } else {
+                0.055
+            }
+        }
+        LipSyncClass::Other => 0.035,
+    }
+}
+
+fn switch_margin_threshold(
+    current: LipSyncClass,
+    candidate: LipSyncClass,
+    singing_mode: bool,
+) -> f32 {
+    if candidate == current {
+        return 0.0;
+    }
+    if matches!(candidate, LipSyncClass::Closed | LipSyncClass::Fricative) {
+        return 0.035;
+    }
+    if is_vowel_class(current) && is_vowel_class(candidate) {
+        return if singing_mode { 0.16 } else { 0.07 };
+    }
+    if matches!(
+        current,
+        LipSyncClass::Rest | LipSyncClass::Closed | LipSyncClass::Fricative
+    ) {
+        return 0.045;
+    }
+    0.065
+}
+
+fn apply_temporal_bias(
+    posterior: &mut [f32; NUM_CLASSES],
+    current: LipSyncClass,
+    candidate: LipSyncClass,
+    singing_mode: bool,
+) {
+    let current_index = current as usize;
+    let bias = if current == candidate {
+        if matches!(current, LipSyncClass::Closed | LipSyncClass::Fricative) {
+            0.04
+        } else if is_vowel_class(current) && singing_mode {
+            0.10
+        } else {
+            0.06
+        }
+    } else if is_vowel_class(current) && is_vowel_class(candidate) {
+        if singing_mode { 0.18 } else { 0.08 }
+    } else {
+        0.05
+    };
+    posterior[current_index] += (1.0 - posterior[current_index]) * bias;
+    normalize_distribution(posterior);
+}
+
+fn is_vowel_class(class: LipSyncClass) -> bool {
+    matches!(
+        class,
+        LipSyncClass::A | LipSyncClass::I | LipSyncClass::U | LipSyncClass::E | LipSyncClass::O
+    )
+}
+
 fn rest_posterior() -> [f32; NUM_CLASSES] {
     let mut posterior = [0.0; NUM_CLASSES];
     posterior[LipSyncClass::Rest as usize] = 0.98;
@@ -1535,6 +1689,72 @@ mod tests {
     }
 
     #[test]
+    fn rapid_vowel_switches_switch_less_in_singing_mode() {
+        let mut normal = LipSyncAnalyzer::new(SAMPLE_RATE, false);
+        let mut singing = LipSyncAnalyzer::new(SAMPLE_RATE, true);
+        let sequence = [
+            LipSyncClass::A,
+            LipSyncClass::I,
+            LipSyncClass::A,
+            LipSyncClass::I,
+            LipSyncClass::A,
+            LipSyncClass::I,
+        ];
+        let normal_switches = count_temporal_switches(&mut normal, &sequence, 0.06);
+        let singing_switches = count_temporal_switches(&mut singing, &sequence, 0.06);
+        assert!(singing_switches < normal_switches);
+    }
+
+    #[test]
+    fn normal_mode_switches_after_minimum_hold() {
+        let mut analyzer = LipSyncAnalyzer::new(SAMPLE_RATE, false);
+        let mut a = posterior_for(LipSyncClass::A, 0.82);
+        analyzer.apply_temporal_state(&mut a, 0.06);
+        assert_eq!(analyzer.current_class, LipSyncClass::A);
+
+        let mut i = posterior_for(LipSyncClass::I, 0.82);
+        analyzer.apply_temporal_state(&mut i, 0.06);
+        assert_eq!(analyzer.current_class, LipSyncClass::I);
+    }
+
+    #[test]
+    fn closed_and_fricative_can_attack_quickly() {
+        let mut analyzer = LipSyncAnalyzer::new(SAMPLE_RATE, false);
+        let mut a = posterior_for(LipSyncClass::A, 0.82);
+        analyzer.apply_temporal_state(&mut a, 0.06);
+
+        let mut closed = posterior_pair(LipSyncClass::A, 0.20, LipSyncClass::Closed, 0.72);
+        analyzer.apply_temporal_state(&mut closed, 0.06);
+        assert_eq!(analyzer.current_class, LipSyncClass::Closed);
+
+        let mut fricative =
+            posterior_pair(LipSyncClass::Closed, 0.20, LipSyncClass::Fricative, 0.72);
+        analyzer.apply_temporal_state(&mut fricative, 0.05);
+        assert_eq!(analyzer.current_class, LipSyncClass::Fricative);
+    }
+
+    #[test]
+    fn low_confidence_candidate_does_not_replace_current_class() {
+        let mut analyzer = LipSyncAnalyzer::new(SAMPLE_RATE, false);
+        let mut a = posterior_for(LipSyncClass::A, 0.82);
+        analyzer.apply_temporal_state(&mut a, 0.06);
+        let mut weak_i = posterior_pair(LipSyncClass::A, 0.40, LipSyncClass::I, 0.43);
+        analyzer.apply_temporal_state(&mut weak_i, 0.12);
+        assert_eq!(analyzer.current_class, LipSyncClass::A);
+    }
+
+    #[test]
+    fn temporal_processing_keeps_posterior_normalized_and_jaw_clamped() {
+        let mut analyzer = LipSyncAnalyzer::new(SAMPLE_RATE, false);
+        let voiced =
+            synthetic_vowel_like_signal(0.5, &[(120.0, 0.4), (720.0, 1.0), (1150.0, 0.65)]);
+        let frame = analyzer.process(&voiced);
+        assert_scores_normalized(frame.posterior);
+        assert!(frame.jaw_open.is_finite());
+        assert!((0.0..=1.0).contains(&frame.jaw_open));
+    }
+
+    #[test]
     fn timed_tts_cue_biases_posterior_at_time() {
         let mut analyzer = LipSyncAnalyzer::with_options(LipSyncOptions {
             sample_rate: SAMPLE_RATE,
@@ -1554,6 +1774,47 @@ mod tests {
         assert!(
             frame.posterior[LipSyncClass::O as usize] > frame.posterior[LipSyncClass::A as usize]
         );
+    }
+
+    fn count_temporal_switches(
+        analyzer: &mut LipSyncAnalyzer,
+        sequence: &[LipSyncClass],
+        dt: f32,
+    ) -> usize {
+        let mut switches = 0;
+        let mut previous = analyzer.current_class;
+        for class in sequence {
+            let mut posterior = posterior_for(*class, 0.82);
+            analyzer.apply_temporal_state(&mut posterior, dt);
+            if analyzer.current_class != previous {
+                switches += 1;
+                previous = analyzer.current_class;
+            }
+        }
+        switches
+    }
+
+    fn posterior_for(class: LipSyncClass, score: f32) -> [f32; NUM_CLASSES] {
+        let mut posterior = [0.0; NUM_CLASSES];
+        posterior[LipSyncClass::Rest as usize] = 0.03;
+        posterior[LipSyncClass::Other as usize] = (1.0 - score - 0.03).max(0.0);
+        posterior[class as usize] = score;
+        normalize_distribution(&mut posterior);
+        posterior
+    }
+
+    fn posterior_pair(
+        current: LipSyncClass,
+        current_score: f32,
+        candidate: LipSyncClass,
+        candidate_score: f32,
+    ) -> [f32; NUM_CLASSES] {
+        let mut posterior = [0.0; NUM_CLASSES];
+        posterior[current as usize] = current_score;
+        posterior[candidate as usize] = candidate_score;
+        posterior[LipSyncClass::Other as usize] = (1.0 - current_score - candidate_score).max(0.0);
+        normalize_distribution(&mut posterior);
+        posterior
     }
 
     fn synthetic_vowel_like_signal(amplitude: f32, partials: &[(f32, f32)]) -> Vec<f32> {

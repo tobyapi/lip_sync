@@ -8,7 +8,7 @@ Implemented scope in this repository:
 - Low-latency 1024-sample frame analysis.
 - C ABI suitable for native plugins and engine bindings.
 - Unity binding source under `bindings/unity`.
-- Singing mode smoothing for sustained notes and slower vowel transitions.
+- Singing mode temporal behavior for sustained notes, slower vowel-to-vowel transitions, and smoother jaw movement.
 - Loud voice / shouting / compressed-audio robustness through RMS normalization, soft limiting, clipping/crest detection, adaptive loudness tracking, and compressed-voice posterior priors.
 - Optional tiny NN blend over normalized spectral features.
 - MFCC/voicing feature extractor for GMM and tiny-classifier experiments.
@@ -71,7 +71,7 @@ typedef struct {
 Flags:
 
 ```text
-1 << 0  Singing mode
+1 << 0  Singing mode / slower temporal vowel transitions
 1 << 1  Optional tiny NN
 1 << 2  Timed cues / metadata fusion
 1 << 3  Robust loudness handling
@@ -140,6 +140,9 @@ The stateful analyzer owns a `FeatureExtractor` for richer classifier paths. It 
 - `rms_db` for loudness and jaw behavior.
 
 GMM mode consumes the richer `FeatureVector.values`. The fixed tiny NN still uses the legacy 16-band shape today, but the feature extractor is the intended input surface for future tiny-model training/export.
+## Temporal State
+
+`LipSyncAnalyzer` applies a lightweight temporal state machine after posterior scoring. It tracks the current class, hold time, previous time step, and switch confidence. Class-specific minimum holds and hysteresis reduce flicker while still allowing quick CLOSED and FRICATIVE attacks. Singing mode increases vowel-to-vowel hold time and switch margin, so sustained vocals move more slowly than normal speech.
 ## Adaptive Normalization
 
 GMM mode applies rolling cepstral mean/variance normalization (CMVN) to `FeatureVector.values`. CMVN updates only on reliable voiced frames: not REST, not FRICATIVE, finite feature values, and not strongly clipped/compressed. This is adaptive profile-free normalization for microphone/EQ/recording drift; it is not user MFCC profile recording.
