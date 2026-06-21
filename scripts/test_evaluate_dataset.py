@@ -8,6 +8,7 @@ import unittest
 SCRIPT = Path(__file__).with_name("evaluate_dataset.py")
 spec = importlib.util.spec_from_file_location("evaluate_dataset", SCRIPT)
 evaluate_dataset = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
 spec.loader.exec_module(evaluate_dataset)
 
 
@@ -79,6 +80,31 @@ class SummaryMathTests(unittest.TestCase):
         self.assertEqual(summary["rest_rejection_accuracy"], 1.0)
         self.assertEqual(summary["fricative_detection_accuracy"], 1.0)
         self.assertAlmostEqual(summary["average_jaw_open"], 0.35)
+
+
+class OptionFlagTests(unittest.TestCase):
+    def parse(self, *extra_args):
+        return evaluate_dataset.parse_args(
+            [
+                "--library",
+                "target/release/lip_sync.dll",
+                "--dataset",
+                "testdata/real_audio",
+                "--out",
+                "target/lipsync_eval",
+                *extra_args,
+            ]
+        )
+
+    def test_gmm_flag_sets_lipsync_flag_gmm(self):
+        args = self.parse("--gmm")
+        options = evaluate_dataset.build_options(16_000, args)
+        self.assertTrue(options.flags & evaluate_dataset.LIPSYNC_FLAG_GMM)
+
+    def test_gmm_flag_defaults_off(self):
+        args = self.parse()
+        options = evaluate_dataset.build_options(16_000, args)
+        self.assertFalse(options.flags & evaluate_dataset.LIPSYNC_FLAG_GMM)
 
 
 if __name__ == "__main__":

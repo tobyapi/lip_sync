@@ -12,13 +12,46 @@ pub struct DiagonalGmm {
     pub class_priors: &'static [f32],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GmmError {
+    ClassCountMismatch { expected: usize, actual: usize },
+    FeatureDimensionMismatch { expected: usize, actual: usize },
+    InvalidModel,
+}
+
 impl DiagonalGmm {
-    pub fn score_class(&self, class_index: usize, features: &[f32]) -> f32 {
-        if class_index >= self.num_classes
-            || self.num_mixtures == 0
-            || self.num_features == 0
-            || features.len() < self.num_features
+    pub fn validate<const N: usize>(&self, features: &[f32]) -> Result<(), GmmError> {
+        if self.num_classes != N {
+            return Err(GmmError::ClassCountMismatch {
+                expected: self.num_classes,
+                actual: N,
+            });
+        }
+        if features.len() != self.num_features {
+            return Err(GmmError::FeatureDimensionMismatch {
+                expected: self.num_features,
+                actual: features.len(),
+            });
+        }
+        if self.num_mixtures == 0 || self.num_features == 0 {
+            return Err(GmmError::InvalidModel);
+        }
+
+        let expected_params = self.num_classes * self.num_mixtures * self.num_features;
+        let expected_mixtures = self.num_classes * self.num_mixtures;
+        if self.means.len() < expected_params
+            || self.inv_vars.len() < expected_params
+            || self.log_weights.len() < expected_mixtures
+            || self.class_priors.len() < self.num_classes
         {
+            return Err(GmmError::InvalidModel);
+        }
+
+        Ok(())
+    }
+
+    pub fn score_class(&self, class_index: usize, features: &[f32]) -> f32 {
+        if class_index >= self.num_classes || features.len() != self.num_features {
             return f32::NEG_INFINITY;
         }
 
@@ -50,15 +83,22 @@ impl DiagonalGmm {
         logsumexp(&mixture_scores) + finite_or_zero(self.class_priors[class_index])
     }
 
-    pub fn posterior<const N: usize>(&self, features: &[f32]) -> [f32; N] {
+    pub fn posterior_checked<const N: usize>(
+        &self,
+        features: &[f32],
+    ) -> Result<[f32; N], GmmError> {
+        self.validate::<N>(features)?;
+
         let mut logits = [f32::NEG_INFINITY; N];
-        if N == 0 || self.num_classes != N {
-            return uniform();
-        }
         for (class_index, logit) in logits.iter_mut().enumerate() {
             *logit = self.score_class(class_index, features);
         }
-        softmax_logits(logits)
+        Ok(softmax_logits(logits))
+    }
+
+    pub fn posterior<const N: usize>(&self, features: &[f32]) -> [f32; N] {
+        self.posterior_checked::<N>(features)
+            .unwrap_or_else(|_| uniform())
     }
 }
 
@@ -175,6 +215,21 @@ mod tests {
         features[7] = f32::INFINITY;
         let posterior = gmm.posterior::<PLACEHOLDER_GMM_CLASSES>(&features);
         assert_normalized(posterior);
+    }
+
+    #[test]
+    fn gmm_rejects_feature_dimension_mismatch() {
+        let gmm = placeholder_vowel_gmm();
+        let err = gmm
+            .posterior_checked::<PLACEHOLDER_GMM_CLASSES>(&[0.0; PLACEHOLDER_GMM_FEATURES + 1])
+            .expect_err("dimension mismatch should not be silently accepted");
+        assert_eq!(
+            err,
+            GmmError::FeatureDimensionMismatch {
+                expected: PLACEHOLDER_GMM_FEATURES,
+                actual: PLACEHOLDER_GMM_FEATURES + 1,
+            }
+        );
     }
 
     #[test]

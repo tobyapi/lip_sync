@@ -26,7 +26,7 @@ Use `SetTimedCues` with `LipSyncTimedCue` entries for TTS viseme metadata or lyr
 
 ## Classifier Flags
 
-The C# binding exposes `LipSyncOptionsFlags.Gmm` and the microphone component has an `enableGmm` toggle. This selects the placeholder diagonal-GMM classifier path in the native SDK; it is intended for trained model experiments and does not imply better accuracy until measured with real labeled WAV data.
+The C# binding exposes `LipSyncOptionsFlags.Gmm` and the microphone component has an `enableGmm` toggle, default off. This selects the placeholder 16-band spectral diagonal-GMM infrastructure path in the native SDK. It is not an accuracy-improvement mode and should stay off for normal evaluation until replaced by a trained model.
 
 ## Audio Thread Usage
 

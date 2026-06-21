@@ -4,7 +4,8 @@
 The script intentionally uses the Python standard library only. It loads the
 compiled native library with ctypes, scans a simple dataset layout, writes a
 per-frame CSV, and writes summary metrics that make classifier changes easier
-to compare without claiming accuracy from synthetic tests alone.
+to compare without claiming accuracy from synthetic tests alone. The placeholder
+GMM path is infrastructure only and is not an accuracy-improvement mode.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import sys
 import wave
 
 CLASS_NAMES = ["REST", "CLOSED", "A", "I", "U", "E", "O", "FRICATIVE", "OTHER"]
+VOWEL_NAMES = ["A", "I", "U", "E", "O"]
 CLASS_TO_INDEX = {name: index for index, name in enumerate(CLASS_NAMES)}
 VOWEL_CLASSES = {"A", "I", "U", "E", "O"}
 NON_VOWEL_DIR_LABELS = {
@@ -50,6 +52,7 @@ LIPSYNC_FLAG_SINGING_MODE = 1 << 0
 LIPSYNC_FLAG_TINY_NN = 1 << 1
 LIPSYNC_FLAG_TIMED_CUES = 1 << 2
 LIPSYNC_FLAG_ROBUST_LOUDNESS = 1 << 3
+LIPSYNC_FLAG_GMM = 1 << 4
 
 
 class EvalError(Exception):
@@ -73,6 +76,20 @@ class LipSyncFrame(ctypes.Structure):
         ("vowel_confidence", ctypes.c_float),
         ("f1_hz", ctypes.c_float),
         ("f2_hz", ctypes.c_float),
+    ]
+
+
+class LipSyncDebugFrame(ctypes.Structure):
+    _fields_ = [
+        ("frame", LipSyncFrame),
+        ("vowel_scores", ctypes.c_float * len(VOWEL_NAMES)),
+        ("activity", ctypes.c_float),
+        ("rms", ctypes.c_float),
+        ("high_ratio", ctypes.c_float),
+        ("zero_crossing_rate", ctypes.c_float),
+        ("spectral_flatness", ctypes.c_float),
+        ("compression_likelihood", ctypes.c_float),
+        ("raw_best_vowel", ctypes.c_int32),
     ]
 
 
@@ -184,6 +201,13 @@ def load_library(path: Path):
         ctypes.POINTER(LipSyncFrame),
     ]
     library.lipsync_process.restype = ctypes.c_bool
+    library.lipsync_process_debug.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_float),
+        ctypes.c_size_t,
+        ctypes.POINTER(LipSyncDebugFrame),
+    ]
+    library.lipsync_process_debug.restype = ctypes.c_bool
     library.lipsync_destroy.argtypes = [ctypes.c_void_p]
     library.lipsync_destroy.restype = None
     return library
@@ -197,6 +221,8 @@ def build_options(sample_rate: int, args: argparse.Namespace) -> LipSyncOptions:
         flags |= LIPSYNC_FLAG_TINY_NN
     if args.robust_loudness:
         flags |= LIPSYNC_FLAG_ROBUST_LOUDNESS
+    if args.gmm:
+        flags |= LIPSYNC_FLAG_GMM
     return LipSyncOptions(sample_rate, flags, args.metadata_weight, args.smoothing, args.loudness_adaptation)
 
 
@@ -207,6 +233,12 @@ def best_class(posterior: list[float]) -> str:
 def top_k_classes(posterior: list[float], k: int) -> list[str]:
     indices = sorted(range(len(posterior)), key=lambda index: posterior[index], reverse=True)[:k]
     return [CLASS_NAMES[index] for index in indices]
+
+
+def raw_best_vowel_name(index: int) -> str:
+    if 0 <= index < len(VOWEL_NAMES):
+        return VOWEL_NAMES[index]
+    return ""
 
 
 def posterior_entropy(posterior: list[float]) -> float:
@@ -243,11 +275,13 @@ def process_file(library, path: Path, label: str, args: argparse.Namespace) -> l
         for start in range(0, len(samples), chunk_samples):
             chunk = samples[start : start + chunk_samples]
             array_type = ctypes.c_float * len(chunk)
-            frame = LipSyncFrame()
-            ok = library.lipsync_process(analyzer, array_type(*chunk), len(chunk), ctypes.byref(frame))
+            debug = LipSyncDebugFrame()
+            ok = library.lipsync_process_debug(analyzer, array_type(*chunk), len(chunk), ctypes.byref(debug))
             if not ok:
                 raise EvalError(f"native library failed while processing {path} at sample {start}")
+            frame = debug.frame
             posterior = [float(frame.posterior[index]) for index in range(len(CLASS_NAMES))]
+            vowel_scores = [float(debug.vowel_scores[index]) for index in range(len(VOWEL_NAMES))]
             time_seconds = start / sample_rate
             rows.append(
                 {
@@ -262,6 +296,14 @@ def process_file(library, path: Path, label: str, args: argparse.Namespace) -> l
                     "f1_hz": float(frame.f1_hz),
                     "f2_hz": float(frame.f2_hz),
                     "posterior": posterior,
+                    "vowel_scores": vowel_scores,
+                    "activity": float(debug.activity),
+                    "rms": float(debug.rms),
+                    "high_ratio": float(debug.high_ratio),
+                    "zcr": float(debug.zero_crossing_rate),
+                    "flatness": float(debug.spectral_flatness),
+                    "compression_likelihood": float(debug.compression_likelihood),
+                    "raw_best_vowel": raw_best_vowel_name(int(debug.raw_best_vowel)),
                     "entropy": posterior_entropy(posterior),
                     "eval_frame": should_evaluate_frame(
                         label, time_seconds + (len(chunk) / sample_rate) * 0.5, duration_seconds, args.center_region
@@ -344,7 +386,17 @@ def write_outputs(rows: list[dict[str, object]], summary: dict[str, object], out
         "f1_hz",
         "f2_hz",
         "entropy",
-    ] + [f"p_{name.lower()}" for name in CLASS_NAMES]
+    ] + [f"p_{name.lower()}" for name in CLASS_NAMES] + [
+        f"vowel_scores_{name.lower()}" for name in VOWEL_NAMES
+    ] + [
+        "activity",
+        "rms",
+        "high_ratio",
+        "zcr",
+        "flatness",
+        "compression_likelihood",
+        "raw_best_vowel",
+    ]
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -352,6 +404,8 @@ def write_outputs(rows: list[dict[str, object]], summary: dict[str, object], out
             output = {key: row.get(key) for key in fieldnames if key in row}
             for name, value in zip(CLASS_NAMES, row["posterior"]):
                 output[f"p_{name.lower()}"] = value
+            for name, value in zip(VOWEL_NAMES, row["vowel_scores"]):
+                output[f"vowel_scores_{name.lower()}"] = value
             writer.writerow(output)
 
     with (out_dir / "summary.json").open("w", encoding="utf-8") as handle:
@@ -367,7 +421,10 @@ def write_outputs(rows: list[dict[str, object]], summary: dict[str, object], out
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate lip_sync on labeled WAV clips.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate lip_sync on labeled WAV clips.",
+        epilog="Note: --gmm enables the placeholder spectral-GMM infrastructure path. It is not an accuracy-improvement mode and should not be used for accuracy claims until replaced by a trained model.",
+    )
     parser.add_argument("--library", required=True, type=Path, help="Path to compiled lip_sync native library")
     parser.add_argument("--dataset", required=True, type=Path, help="Path to testdata/real_audio dataset")
     parser.add_argument("--out", required=True, type=Path, help="Output directory for CSV/JSON reports")
@@ -375,6 +432,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--center-region", type=float, default=0.6, help="Center fraction of sustained vowel clips to evaluate")
     parser.add_argument("--singing", action="store_true", help="Enable singing-mode analyzer flag")
     parser.add_argument("--tiny-nn", action="store_true", help="Enable optional tiny NN analyzer flag")
+    parser.add_argument(
+        "--gmm",
+        action="store_true",
+        help="Enable placeholder spectral-GMM infrastructure only; not for accuracy improvement claims",
+    )
     parser.add_argument("--no-robust-loudness", dest="robust_loudness", action="store_false", help="Disable robust loudness flag")
     parser.set_defaults(robust_loudness=True)
     parser.add_argument("--metadata-weight", type=float, default=0.0, help="Metadata weight passed to options")

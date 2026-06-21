@@ -1,8 +1,4 @@
-use crate::{
-    features::FeatureExtractor,
-    gmm, lpc,
-    normalization::{CmvnUpdateGate, RollingCmvn, RollingLoudness},
-};
+use crate::{gmm, lpc, normalization::RollingLoudness};
 use num_complex::Complex;
 use rustfft::FftPlanner;
 
@@ -436,6 +432,61 @@ impl Default for LipSyncFrame {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct LipSyncDebugFrame {
+    pub frame: LipSyncFrame,
+    pub vowel_scores: [f32; NUM_VOWELS],
+    pub activity: f32,
+    pub rms: f32,
+    pub high_ratio: f32,
+    pub zero_crossing_rate: f32,
+    pub spectral_flatness: f32,
+    pub compression_likelihood: f32,
+    pub raw_best_vowel: i32,
+}
+
+impl Default for LipSyncDebugFrame {
+    fn default() -> Self {
+        Self {
+            frame: LipSyncFrame::default(),
+            vowel_scores: [0.2; NUM_VOWELS],
+            activity: 0.0,
+            rms: 0.0,
+            high_ratio: 0.0,
+            zero_crossing_rate: 0.0,
+            spectral_flatness: 0.0,
+            compression_likelihood: 0.0,
+            raw_best_vowel: -1,
+        }
+    }
+}
+
+impl LipSyncDebugFrame {
+    fn from_parts(
+        frame: LipSyncFrame,
+        evidence: VowelEvidence,
+        profile: &SpectralProfile,
+        activity: f32,
+    ) -> Self {
+        Self {
+            frame,
+            vowel_scores: evidence.scores,
+            activity,
+            rms: profile.rms,
+            high_ratio: profile.high_ratio,
+            zero_crossing_rate: profile.zero_crossing_rate,
+            spectral_flatness: profile.spectral_flatness,
+            compression_likelihood: profile.compression_likelihood,
+            raw_best_vowel: if evidence.confidence > EPSILON {
+                best_vowel_from_scores(evidence.scores) as i32
+            } else {
+                -1
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LipSyncAnalyzer {
     options: LipSyncOptions,
@@ -445,8 +496,6 @@ pub struct LipSyncAnalyzer {
     previous_jaw_open: f32,
     current_time_seconds: f32,
     timed_cues: Vec<LipSyncTimedCue>,
-    feature_extractor: FeatureExtractor,
-    cmvn: RollingCmvn,
     rolling_loudness: RollingLoudness,
     closed_detector: ClosedDetector,
     current_class: LipSyncClass,
@@ -454,8 +503,13 @@ pub struct LipSyncAnalyzer {
     previous_time_step_seconds: f32,
     last_switch_confidence: f32,
     audio_ring: Vec<f32>,
-    samples_since_last_analysis: usize,
+    total_samples_seen: usize,
+    next_analysis_end_sample: usize,
+    previous_analysis_window_end_sample: usize,
+    last_analysis_window_end_sample: usize,
     latest_frame: LipSyncFrame,
+    latest_debug_frame: LipSyncDebugFrame,
+    analysis_count: usize,
 }
 
 impl LipSyncAnalyzer {
@@ -481,8 +535,6 @@ impl LipSyncAnalyzer {
             previous_jaw_open: 0.0,
             current_time_seconds: 0.0,
             timed_cues: Vec::new(),
-            feature_extractor: FeatureExtractor::new(),
-            cmvn: RollingCmvn::default(),
             rolling_loudness: RollingLoudness::new(),
             closed_detector: ClosedDetector::new(ClosedDetectionMode::UltraLowLatency),
             current_class: LipSyncClass::Rest,
@@ -490,8 +542,13 @@ impl LipSyncAnalyzer {
             previous_time_step_seconds: 0.0,
             last_switch_confidence: 1.0,
             audio_ring: Vec::new(),
-            samples_since_last_analysis: 0,
+            total_samples_seen: 0,
+            next_analysis_end_sample: 0,
+            previous_analysis_window_end_sample: 0,
+            last_analysis_window_end_sample: 0,
             latest_frame: LipSyncFrame::default(),
+            latest_debug_frame: LipSyncDebugFrame::default(),
+            analysis_count: 0,
         }
     }
 
@@ -511,41 +568,57 @@ impl LipSyncAnalyzer {
     }
 
     pub fn process(&mut self, pcm_data: &[f32]) -> LipSyncFrame {
+        self.process_debug(pcm_data).frame
+    }
+
+    pub fn process_debug(&mut self, pcm_data: &[f32]) -> LipSyncDebugFrame {
         let time_seconds = self.current_time_seconds;
-        let frame = self.process_at_time(pcm_data, time_seconds);
+        let debug_frame = self.process_at_time_debug(pcm_data, time_seconds);
         self.current_time_seconds += pcm_data.len() as f32 / self.options.sample_rate as f32;
-        frame
+        debug_frame
     }
 
     pub fn process_at_time(&mut self, pcm_data: &[f32], time_seconds: f32) -> LipSyncFrame {
+        self.process_at_time_debug(pcm_data, time_seconds).frame
+    }
+
+    pub fn process_at_time_debug(
+        &mut self,
+        pcm_data: &[f32],
+        time_seconds: f32,
+    ) -> LipSyncDebugFrame {
         if pcm_data.is_empty() {
-            return self.latest_frame;
+            return self.latest_debug_frame;
         }
 
         self.append_audio_to_ring(pcm_data);
+        self.total_samples_seen = self.total_samples_seen.saturating_add(pcm_data.len());
         let window_samples = self.analysis_window_samples();
         let hop_samples = self.analysis_hop_samples();
-        if self.audio_ring.len() < window_samples {
+        if self.total_samples_seen < window_samples {
             self.latest_frame = LipSyncFrame::default();
-            return self.latest_frame;
+            self.latest_debug_frame = LipSyncDebugFrame::default();
+            return self.latest_debug_frame;
         }
 
-        self.samples_since_last_analysis = self
-            .samples_since_last_analysis
-            .saturating_add(pcm_data.len());
-        let mut analyzed = false;
-        while self.samples_since_last_analysis >= hop_samples {
-            let window = self.latest_analysis_window(window_samples);
-            self.latest_frame = self.analyze_pcm_window(&window, time_seconds);
-            self.samples_since_last_analysis -= hop_samples;
-            analyzed = true;
+        if self.next_analysis_end_sample < window_samples {
+            self.next_analysis_end_sample = window_samples;
         }
 
-        if analyzed {
-            self.latest_frame
-        } else {
-            self.latest_frame
+        while self.next_analysis_end_sample <= self.total_samples_seen {
+            if let Some(window) =
+                self.analysis_window_ending_at(self.next_analysis_end_sample, window_samples)
+            {
+                self.latest_debug_frame = self.analyze_pcm_window(&window, time_seconds);
+                self.latest_frame = self.latest_debug_frame.frame;
+                self.previous_analysis_window_end_sample = self.last_analysis_window_end_sample;
+                self.last_analysis_window_end_sample = self.next_analysis_end_sample;
+            }
+            self.next_analysis_end_sample =
+                self.next_analysis_end_sample.saturating_add(hop_samples);
         }
+
+        self.latest_debug_frame
     }
 
     fn append_audio_to_ring(&mut self, pcm_data: &[f32]) {
@@ -558,9 +631,26 @@ impl LipSyncAnalyzer {
         }
     }
 
-    fn latest_analysis_window(&self, window_samples: usize) -> Vec<f32> {
-        let start = self.audio_ring.len().saturating_sub(window_samples);
-        self.audio_ring[start..].to_vec()
+    fn analysis_window_ending_at(
+        &self,
+        end_sample: usize,
+        window_samples: usize,
+    ) -> Option<Vec<f32>> {
+        if end_sample < window_samples || end_sample > self.total_samples_seen {
+            return None;
+        }
+        let ring_start_sample = self
+            .total_samples_seen
+            .saturating_sub(self.audio_ring.len());
+        if end_sample < ring_start_sample {
+            return None;
+        }
+        let end_index = end_sample - ring_start_sample;
+        let start_index = end_index.checked_sub(window_samples)?;
+        if end_index > self.audio_ring.len() {
+            return None;
+        }
+        Some(self.audio_ring[start_index..end_index].to_vec())
     }
 
     fn analysis_window_samples(&self) -> usize {
@@ -582,26 +672,21 @@ impl LipSyncAnalyzer {
             .max(FRAME_SIZE)
     }
 
-    fn analyze_pcm_window(&mut self, pcm_data: &[f32], time_seconds: f32) -> LipSyncFrame {
+    fn analyze_pcm_window(&mut self, pcm_data: &[f32], time_seconds: f32) -> LipSyncDebugFrame {
         let time_step_seconds = self.time_step_seconds(pcm_data);
-        let mut extracted_features = None;
-        let classifier_features = if self.options.gmm_enabled() {
-            let features = self
-                .feature_extractor
-                .extract(pcm_data, self.options.sample_rate);
-            let normalized = self.cmvn.normalize(&features.values);
-            extracted_features = Some(features);
-            Some(normalized)
+        let profile = analyze_spectral_profile(pcm_data, self.options);
+        let classifier_features: Option<&[f32]> = if self.options.gmm_enabled() {
+            Some(&profile.normalized_bands)
         } else {
             None
         };
         let evidence = analyze_vowel_evidence_with_classifier_features(
             pcm_data,
             self.options,
-            classifier_features.as_deref(),
+            classifier_features,
         );
-        let profile = analyze_spectral_profile(pcm_data, self.options);
         self.update_loudness_trackers(&profile);
+        self.analysis_count += 1;
 
         if profile.rms <= SILENCE_RMS && profile.peak <= SILENCE_RMS * 3.0 {
             let mut frame = LipSyncFrame {
@@ -617,7 +702,7 @@ impl LipSyncAnalyzer {
             }
             self.remember_rest_temporal(time_step_seconds);
             self.remember_frame(&frame);
-            return frame;
+            return LipSyncDebugFrame::from_parts(frame, evidence, &profile, 0.0);
         }
 
         let activity = self.activity_score(&profile);
@@ -695,19 +780,8 @@ impl LipSyncAnalyzer {
             f1_hz: evidence.f1_hz,
             f2_hz: evidence.f2_hz,
         };
-        if let Some(features) = extracted_features.as_ref() {
-            self.cmvn.update_if_reliable(
-                &features.values,
-                CmvnUpdateGate {
-                    voiced_confidence: features.voiced_confidence,
-                    rest_score: frame.posterior[LipSyncClass::Rest as usize],
-                    fricative_score: frame.posterior[LipSyncClass::Fricative as usize],
-                    compression_likelihood: profile.compression_likelihood,
-                },
-            );
-        }
         self.remember_frame(&frame);
-        frame
+        LipSyncDebugFrame::from_parts(frame, evidence, &profile, activity)
     }
 
     fn time_step_seconds(&mut self, pcm_data: &[f32]) -> f32 {
@@ -961,8 +1035,9 @@ fn analyze_vowel_evidence_with_classifier_features(
     let mut scores = match VowelClassifierKind::from_options(options) {
         VowelClassifierKind::MultiPrototype => multi_prototype_scores(&profile.normalized_bands),
         VowelClassifierKind::DiagonalGmm => classifier_features
-            .map(gmm_vowel_scores)
-            .unwrap_or_else(|| gmm_vowel_scores(&profile.normalized_bands)),
+            .and_then(|features| gmm_vowel_scores(features).ok())
+            .or_else(|| gmm_vowel_scores(&profile.normalized_bands).ok())
+            .unwrap_or_else(|| multi_prototype_scores(&profile.normalized_bands)),
     };
     if options.tiny_nn_enabled() {
         let nn_scores = tiny_nn_scores(&profile);
@@ -1078,8 +1153,13 @@ fn prepare_analysis_frame(pcm_data: &[f32], robust_loudness: bool) -> Vec<f32> {
     let mut frame = vec![0.0; FRAME_SIZE];
     let start = pcm_data.len().saturating_sub(FRAME_SIZE);
     let source = &pcm_data[start..];
+    let target_start = if source.len() < FRAME_SIZE {
+        (FRAME_SIZE - source.len()) / 2
+    } else {
+        0
+    };
     for (index, sample) in source.iter().take(FRAME_SIZE).enumerate() {
-        frame[index] = sample.clamp(-1.0, 1.0);
+        frame[target_start + index] = sample.clamp(-1.0, 1.0);
     }
     if !robust_loudness {
         return frame;
@@ -1203,9 +1283,9 @@ fn compensate_compressed_feature(
 
     normalize_feature(compensated)
 }
-fn gmm_vowel_scores(features: &[f32]) -> [f32; NUM_VOWELS] {
+fn gmm_vowel_scores(features: &[f32]) -> Result<[f32; NUM_VOWELS], gmm::GmmError> {
     let model = gmm::placeholder_vowel_gmm();
-    model.posterior::<NUM_VOWELS>(features)
+    model.posterior_checked::<NUM_VOWELS>(features)
 }
 
 fn multi_prototype_scores(feature: &[f32; NUM_BANDS]) -> [f32; NUM_VOWELS] {
@@ -1678,6 +1758,37 @@ mod tests {
     }
 
     #[test]
+    fn placeholder_gmm_rejects_mfcc_feature_vector_length() {
+        let features = vec![0.0; crate::features::FEATURE_VECTOR_LEN];
+        let err = gmm_vowel_scores(&features)
+            .expect_err("31-dim MFCC feature vectors must not be accepted by 16-band GMM");
+        assert_eq!(
+            err,
+            gmm::GmmError::FeatureDimensionMismatch {
+                expected: gmm::PLACEHOLDER_GMM_FEATURES,
+                actual: crate::features::FEATURE_VECTOR_LEN,
+            }
+        );
+    }
+
+    #[test]
+    fn short_16khz_windows_are_center_padded() {
+        let pcm = vec![0.1, -0.2, 0.3, -0.4];
+        let frame = prepare_analysis_frame(&pcm, false);
+        let target_start = (FRAME_SIZE - pcm.len()) / 2;
+        assert_eq!(
+            &frame[target_start..target_start + pcm.len()],
+            pcm.as_slice()
+        );
+        assert!(frame[..target_start].iter().all(|sample| *sample == 0.0));
+        assert!(
+            frame[target_start + pcm.len()..]
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
+    }
+
+    #[test]
     fn small_eq_tilt_keeps_best_vowel_stable() {
         for vowel_index in 0..NUM_VOWELS {
             let base = normalize_feature(VOWEL_PROTOTYPES[vowel_index][0]);
@@ -1996,6 +2107,21 @@ mod tests {
             .map(|(whole, chunked)| (whole - chunked).abs())
             .sum::<f32>();
         assert!(drift < 0.35, "chunked drift was {drift}");
+    }
+
+    #[test]
+    fn one_20ms_chunk_does_not_reanalyze_identical_latest_window_twice() {
+        let sample_rate = 16_000;
+        let mut analyzer = LipSyncAnalyzer::new(sample_rate, false);
+        let chunk = synthetic_vowel_like_signal_at(sample_rate, 320, 0.35, &[(220.0, 1.0)]);
+
+        analyzer.process(&chunk);
+        assert_eq!(analyzer.analysis_count, 0);
+
+        analyzer.process(&chunk);
+        assert_eq!(analyzer.analysis_count, 2);
+        assert_eq!(analyzer.previous_analysis_window_end_sample, 400);
+        assert_eq!(analyzer.last_analysis_window_end_sample, 560);
     }
 
     #[test]

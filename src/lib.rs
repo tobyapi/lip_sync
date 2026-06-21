@@ -5,7 +5,8 @@ pub mod normalization;
 pub mod vowel;
 
 use crate::vowel::{
-    LipSyncAnalyzer, LipSyncFrame, LipSyncOptions, LipSyncTimedCue, Vowel, recognize_vowel_from_pcm,
+    LipSyncAnalyzer, LipSyncDebugFrame, LipSyncFrame, LipSyncOptions, LipSyncTimedCue, Vowel,
+    recognize_vowel_from_pcm,
 };
 use libc::size_t;
 use std::slice;
@@ -98,6 +99,27 @@ pub extern "C" fn lipsync_process(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn lipsync_process_debug(
+    analyzer: *mut LipSyncAnalyzer,
+    pcm: *const f32,
+    len: size_t,
+    result: *mut LipSyncDebugFrame,
+) -> bool {
+    if analyzer.is_null() || pcm.is_null() || result.is_null() || len == 0 {
+        return false;
+    }
+
+    let analyzer = unsafe { &mut *analyzer };
+    let pcm_data = unsafe { slice::from_raw_parts(pcm, len as usize) };
+    let frame = analyzer.process_debug(pcm_data);
+
+    unsafe {
+        *result = frame;
+    }
+    true
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn lipsync_process_at_time(
     analyzer: *mut LipSyncAnalyzer,
     pcm: *const f32,
@@ -117,6 +139,33 @@ pub extern "C" fn lipsync_process_at_time(
     let analyzer = unsafe { &mut *analyzer };
     let pcm_data = unsafe { slice::from_raw_parts(pcm, len as usize) };
     let frame = analyzer.process_at_time(pcm_data, time_seconds.max(0.0));
+
+    unsafe {
+        *result = frame;
+    }
+    true
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn lipsync_process_at_time_debug(
+    analyzer: *mut LipSyncAnalyzer,
+    pcm: *const f32,
+    len: size_t,
+    time_seconds: f32,
+    result: *mut LipSyncDebugFrame,
+) -> bool {
+    if analyzer.is_null()
+        || pcm.is_null()
+        || result.is_null()
+        || len == 0
+        || !time_seconds.is_finite()
+    {
+        return false;
+    }
+
+    let analyzer = unsafe { &mut *analyzer };
+    let pcm_data = unsafe { slice::from_raw_parts(pcm, len as usize) };
+    let frame = analyzer.process_at_time_debug(pcm_data, time_seconds.max(0.0));
 
     unsafe {
         *result = frame;
@@ -168,6 +217,23 @@ mod tests {
 
         assert!(ok);
         assert!(frame.posterior[LipSyncClass::Rest as usize] > 0.9);
+
+        lipsync_destroy(analyzer);
+    }
+
+    #[test]
+    fn lipsync_c_abi_debug_processes_raw_fields() {
+        let analyzer = lipsync_create(44_100, false);
+        assert!(!analyzer.is_null());
+
+        let pcm = vec![0.0; 1024];
+        let mut frame = LipSyncDebugFrame::default();
+        let ok = lipsync_process_debug(analyzer, pcm.as_ptr(), pcm.len(), &mut frame);
+
+        assert!(ok);
+        assert!(frame.frame.posterior[LipSyncClass::Rest as usize] > 0.9);
+        assert!(frame.rms >= 0.0);
+        assert_eq!(frame.raw_best_vowel, -1);
 
         lipsync_destroy(analyzer);
     }
