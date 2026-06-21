@@ -16,7 +16,6 @@ Implemented scope in this repository:
 - TTS viseme metadata and lyric timing fusion through timed class cues.
 - Engine-agnostic mapped output for generic, VRM, ARKit-style, and MetaHuman-style mouth controls.
 - Interleaved PCM processing helpers for bindings that receive engine-native multi-channel audio buffers.
-- Legacy single-vowel C ABI for compatibility.
 
 Not implemented here:
 
@@ -62,9 +61,9 @@ For engine integration, `LipSyncMappedFrame` provides stable mouth-control weigh
 
 - `aa`, `ih`, `ou`, `ee`, `oh`: VRM/Japanese vowel-style viseme weights.
 - `mouth_close`, `mouth_funnel`, `mouth_pucker`, `mouth_wide`, `mouth_*`: ARKit-style and MetaHuman-style curve weights.
-- `best_class` and `legacy_vowel`: native helper outputs so bindings do not need to duplicate class selection or AIUEO compatibility mapping.
+- `best_class`: native helper output so bindings do not need to duplicate class selection.
 
-Mapper kinds are `0` generic, `1` VRM, `2` ARKit-style, and `3` MetaHuman-style. AIUEO is kept as a compatibility surface; new integrations should prefer the 9-class posterior or mapped output.
+Mapper kinds are `0` generic, `1` VRM, `2` ARKit-style, and `3` MetaHuman-style. New integrations should consume the 9-class posterior or mapped output directly.
 
 ## Options
 
@@ -90,12 +89,6 @@ Flags:
 
 ## C ABI
 
-Legacy compatibility:
-
-```c
-bool recognize_vowel(const float* pcm, size_t len, uint32_t sample_rate, Vowel* result);
-```
-
 Stateful SDK API:
 
 ```c
@@ -114,7 +107,6 @@ bool lipsync_process_interleaved_at_time(LipSyncAnalyzer* analyzer, const float*
 bool lipsync_process_interleaved_mapped(LipSyncAnalyzer* analyzer, const float* pcm, size_t frame_count, uint32_t channels, uint32_t mapper_kind, LipSyncMappedFrame* result);
 bool lipsync_process_interleaved_at_time_mapped(LipSyncAnalyzer* analyzer, const float* pcm, size_t frame_count, uint32_t channels, float time_seconds, uint32_t mapper_kind, LipSyncMappedFrame* result);
 bool lipsync_frame_best_class(const LipSyncFrame* frame, uint32_t* result);
-bool lipsync_frame_legacy_vowel(const LipSyncFrame* frame, int32_t* result);
 bool lipsync_frame_class_score(const LipSyncFrame* frame, uint32_t class_index, float* result);
 bool lipsync_map_frame(const LipSyncFrame* frame, uint32_t mapper_kind, LipSyncMappedFrame* result);
 bool lipsync_set_timed_cues(LipSyncAnalyzer* analyzer, const LipSyncTimedCue* cues, size_t len);
@@ -164,7 +156,7 @@ The crate includes a `FeatureExtractor` for future trained-model export and offl
 - Simple autocorrelation f0 estimate.
 - `rms_db` for loudness and jaw behavior.
 
-The placeholder GMM path intentionally does not consume `FeatureVector.values`: those are 31-dimensional MFCC/voicing features, while the placeholder GMM means are 16-band spectral prototypes. Until a trained 31-dimensional model exists, GMM mode uses the same 16-band spectral feature space as the prototype classifier. The fixed tiny NN also uses the legacy 16-band shape today, while the feature extractor remains the intended input surface for future trained model export.
+The placeholder GMM path intentionally does not consume `FeatureVector.values`: those are 31-dimensional MFCC/voicing features, while the placeholder GMM means are 16-band spectral prototypes. Until a trained 31-dimensional model exists, GMM mode uses the same 16-band spectral feature space as the prototype classifier. The fixed tiny NN also uses the current 16-band shape today, while the feature extractor remains the intended input surface for future trained model export.
 ## Closed Detection
 
 CLOSED uses a dedicated low-latency heuristic detector instead of treating every low-confidence vowel as closed. The detector uses short energy valleys, low high-frequency ratio, compact spectral shape, low jaw-openness target, and nearby onset evidence. The default mode is causal and conservative. An internal quality/lookahead mode can boost CLOSED when a 20-30 ms style valley-plus-following-onset pattern is available, but perfect p/b/m detection is impossible from audio-only causal frames.

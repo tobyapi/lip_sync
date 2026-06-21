@@ -7,34 +7,11 @@ pub mod vowel;
 
 use crate::mapper::{LipSyncMappedFrame, map_frame};
 use crate::vowel::{
-    LipSyncAnalyzer, LipSyncDebugFrame, LipSyncFrame, LipSyncOptions, LipSyncTimedCue, Vowel,
-    lip_sync_class_from_index, recognize_vowel_from_pcm,
+    LipSyncAnalyzer, LipSyncDebugFrame, LipSyncFrame, LipSyncOptions, LipSyncTimedCue,
+    lip_sync_class_from_index,
 };
 use libc::size_t;
 use std::slice;
-
-#[unsafe(no_mangle)]
-pub extern "C" fn recognize_vowel(
-    pcm: *const f32,
-    len: size_t,
-    sample_rate: u32,
-    result: *mut Vowel,
-) -> bool {
-    if pcm.is_null() || result.is_null() || len == 0 || sample_rate == 0 {
-        return false;
-    }
-
-    let pcm_data = unsafe { slice::from_raw_parts(pcm, len as usize) };
-
-    if let Some(vowel) = recognize_vowel_from_pcm(pcm_data, sample_rate) {
-        unsafe {
-            *result = vowel;
-        }
-        true
-    } else {
-        false
-    }
-}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn lipsync_default_options(sample_rate: u32) -> LipSyncOptions {
@@ -55,19 +32,6 @@ pub extern "C" fn lipsync_frame_best_class(frame: *const LipSyncFrame, result: *
     let frame = unsafe { &*frame };
     unsafe {
         *result = frame.best_class() as u32;
-    }
-    true
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn lipsync_frame_legacy_vowel(frame: *const LipSyncFrame, result: *mut i32) -> bool {
-    if frame.is_null() || result.is_null() {
-        return false;
-    }
-
-    let frame = unsafe { &*frame };
-    unsafe {
-        *result = frame.legacy_vowel().map_or(-1, |vowel| vowel as i32);
     }
     true
 }
@@ -470,21 +434,6 @@ mod tests {
     use crate::vowel::{
         LIPSYNC_FLAG_ROBUST_LOUDNESS, LIPSYNC_FLAG_TIMED_CUES, LipSyncClass, LipSyncCueKind,
     };
-    use std::ptr;
-
-    #[test]
-    fn recognize_vowel_ffi_rejects_nulls() {
-        let mut vowel = Vowel::A;
-        assert!(!recognize_vowel(ptr::null(), 1024, 44_100, &mut vowel));
-
-        let pcm = vec![0.0; 1024];
-        assert!(!recognize_vowel(
-            pcm.as_ptr(),
-            pcm.len(),
-            44_100,
-            ptr::null_mut()
-        ));
-    }
 
     #[test]
     fn lipsync_c_abi_lifecycle_processes_a_frame() {
@@ -564,10 +513,6 @@ mod tests {
         let mut class_index = 0;
         assert!(lipsync_frame_best_class(&frame, &mut class_index));
         assert_eq!(class_index, LipSyncClass::A as u32);
-
-        let mut legacy_vowel = -1;
-        assert!(lipsync_frame_legacy_vowel(&frame, &mut legacy_vowel));
-        assert_eq!(legacy_vowel, Vowel::A as i32);
 
         let mut mapped = LipSyncMappedFrame::default();
         assert!(lipsync_map_frame(

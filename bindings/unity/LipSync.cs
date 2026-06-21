@@ -4,7 +4,6 @@ using UnityEngine;
 
 namespace TobyApi.LipSync
 {
-    public enum LipSyncVowel { A = 0, I = 1, U = 2, E = 3, O = 4 }
     public enum LipSyncClass { Rest = 0, Closed = 1, A = 2, I = 3, U = 4, E = 5, O = 6, Fricative = 7, Other = 8 }
     public enum LipSyncCueKind { TtsViseme = 1, LyricTiming = 2 }
     public enum LipSyncMapperKind : uint { Generic = 0, Vrm = 1, Arkit = 2, MetaHuman = 3 }
@@ -112,13 +111,6 @@ namespace TobyApi.LipSync
             }
         }
 
-        public bool TryGetLegacyVowel(out LipSyncVowel vowel)
-        {
-            LipSyncFrame frame = this;
-            if (LipSync.TryGetLegacyVowel(ref frame, out vowel)) return true;
-            return TryMapLegacyVowelFallback(BestClassFallback, out vowel);
-        }
-
         private LipSyncClass BestClassFallback
         {
             get
@@ -138,19 +130,6 @@ namespace TobyApi.LipSync
                 return bestClass;
             }
         }
-
-        private static bool TryMapLegacyVowelFallback(LipSyncClass lipSyncClass, out LipSyncVowel vowel)
-        {
-            switch (lipSyncClass)
-            {
-                case LipSyncClass.A: vowel = LipSyncVowel.A; return true;
-                case LipSyncClass.I: vowel = LipSyncVowel.I; return true;
-                case LipSyncClass.U: vowel = LipSyncVowel.U; return true;
-                case LipSyncClass.E: vowel = LipSyncVowel.E; return true;
-                case LipSyncClass.O: vowel = LipSyncVowel.O; return true;
-                default: vowel = default(LipSyncVowel); return false;
-            }
-        }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -158,7 +137,6 @@ namespace TobyApi.LipSync
     {
         public uint kind;
         public uint bestClass;
-        public int legacyVowel;
         public float confidence;
         public float jawOpen;
         public float aa;
@@ -182,7 +160,6 @@ namespace TobyApi.LipSync
 
         public LipSyncMapperKind Kind => (LipSyncMapperKind)kind;
         public LipSyncClass BestClass => (LipSyncClass)bestClass;
-        public bool HasLegacyVowel => legacyVowel >= 0;
 
         public static LipSyncMappedFrame Empty
         {
@@ -190,22 +167,9 @@ namespace TobyApi.LipSync
             {
                 LipSyncMappedFrame frame = default(LipSyncMappedFrame);
                 frame.bestClass = (uint)LipSyncClass.Rest;
-                frame.legacyVowel = -1;
                 frame.confidence = 1f;
                 return frame;
             }
-        }
-
-        public bool TryGetLegacyVowel(out LipSyncVowel vowel)
-        {
-            if (legacyVowel >= 0 && legacyVowel <= (int)LipSyncVowel.O)
-            {
-                vowel = (LipSyncVowel)legacyVowel;
-                return true;
-            }
-
-            vowel = default(LipSyncVowel);
-            return false;
         }
     }
 
@@ -241,19 +205,6 @@ namespace TobyApi.LipSync
         private const string NativeLibrary = "lip_sync";
         private static bool nativeAvailable = true;
         private static bool reportedNativeUnavailable;
-
-        public static bool TryRecognizeVowel(float[] pcm, int sampleRate, out LipSyncVowel vowel)
-        {
-            vowel = default(LipSyncVowel);
-            if (!nativeAvailable || pcm == null || pcm.Length == 0 || sampleRate <= 0) return false;
-#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
-            try { return NativeMethods.recognize_vowel(pcm, (UIntPtr)pcm.Length, (uint)sampleRate, out vowel); }
-            catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
-#else
-            ReportNativeUnavailable("lip_sync native plugin is only included for Windows x86_64.");
-#endif
-            return false;
-        }
 
         public static bool TryGetDefaultOptions(int sampleRate, out LipSyncOptions options)
         {
@@ -332,24 +283,6 @@ namespace TobyApi.LipSync
                 bool ok = NativeMethods.lipsync_frame_best_class(ref frame, out classIndex);
                 if (!ok) return false;
                 bestClass = (LipSyncClass)classIndex;
-                return true;
-            }
-            catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
-#endif
-            return false;
-        }
-
-        internal static bool TryGetLegacyVowel(ref LipSyncFrame frame, out LipSyncVowel vowel)
-        {
-            vowel = default(LipSyncVowel);
-            if (!nativeAvailable) return false;
-#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
-            try
-            {
-                int vowelIndex;
-                bool ok = NativeMethods.lipsync_frame_legacy_vowel(ref frame, out vowelIndex);
-                if (!ok || vowelIndex < 0 || vowelIndex > (int)LipSyncVowel.O) return false;
-                vowel = (LipSyncVowel)vowelIndex;
                 return true;
             }
             catch (Exception exception) when (IsNativeException(exception)) { ReportNativeUnavailable(exception); }
@@ -502,10 +435,6 @@ namespace TobyApi.LipSync
         private static class NativeMethods
         {
             [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
-            [return: MarshalAs(UnmanagedType.I1)]
-            internal static extern bool recognize_vowel([In] float[] pcmData, UIntPtr len, uint sampleRate, out LipSyncVowel result);
-
-            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
             internal static extern LipSyncOptions lipsync_default_options(uint sampleRate);
 
             [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
@@ -517,10 +446,6 @@ namespace TobyApi.LipSync
 
             [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
             [return: MarshalAs(UnmanagedType.I1)]
-            internal static extern bool lipsync_frame_legacy_vowel([In] ref LipSyncFrame frame, out int result);
-
-            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
-            [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool lipsync_map_frame([In] ref LipSyncFrame frame, uint mapperKind, out LipSyncMappedFrame result);
 
             [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
@@ -529,7 +454,6 @@ namespace TobyApi.LipSync
             [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
             [return: MarshalAs(UnmanagedType.I1)]
             internal static extern bool lipsync_process(IntPtr analyzer, [In] float[] pcmData, UIntPtr len, out LipSyncFrame result);
-
 
             [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl)]
             [return: MarshalAs(UnmanagedType.I1)]

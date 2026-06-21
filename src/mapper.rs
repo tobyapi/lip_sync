@@ -1,4 +1,4 @@
-use crate::vowel::{LipSyncClass, LipSyncFrame, Vowel};
+use crate::vowel::{LipSyncClass, LipSyncFrame};
 
 pub const LIPSYNC_MAPPER_GENERIC: u32 = 0;
 pub const LIPSYNC_MAPPER_VRM: u32 = 1;
@@ -10,7 +10,6 @@ pub const LIPSYNC_MAPPER_METAHUMAN: u32 = 3;
 pub struct LipSyncMappedFrame {
     pub kind: u32,
     pub best_class: u32,
-    pub legacy_vowel: i32,
     pub confidence: f32,
     pub jaw_open: f32,
     pub aa: f32,
@@ -38,7 +37,6 @@ impl Default for LipSyncMappedFrame {
         Self {
             kind: LIPSYNC_MAPPER_GENERIC,
             best_class: LipSyncClass::Rest as u32,
-            legacy_vowel: -1,
             confidence: 1.0,
             jaw_open: 0.0,
             aa: 0.0,
@@ -108,7 +106,6 @@ pub fn map_frame(frame: &LipSyncFrame, kind: u32) -> Option<LipSyncMappedFrame> 
     let mut mapped = LipSyncMappedFrame {
         kind,
         best_class: frame.best_class() as u32,
-        legacy_vowel: frame.legacy_vowel().map_or(-1, |vowel| vowel as i32),
         confidence: frame.best_class_score(),
         jaw_open: open,
         aa,
@@ -142,17 +139,6 @@ pub fn map_frame(frame: &LipSyncFrame, kind: u32) -> Option<LipSyncMappedFrame> 
     Some(mapped)
 }
 
-pub fn legacy_vowel_from_class(class: LipSyncClass) -> Option<Vowel> {
-    match class {
-        LipSyncClass::A => Some(Vowel::A),
-        LipSyncClass::I => Some(Vowel::I),
-        LipSyncClass::U => Some(Vowel::U),
-        LipSyncClass::E => Some(Vowel::E),
-        LipSyncClass::O => Some(Vowel::O),
-        _ => None,
-    }
-}
-
 fn clamp01(value: f32) -> f32 {
     value.clamp(0.0, 1.0)
 }
@@ -170,21 +156,19 @@ mod tests {
         let mapped = map_frame(&frame, LIPSYNC_MAPPER_VRM).unwrap();
 
         assert_eq!(mapped.best_class, LipSyncClass::A as u32);
-        assert_eq!(mapped.legacy_vowel, Vowel::A as i32);
         assert!(mapped.aa > 0.8);
         assert!(mapped.ih < 0.1);
         assert_eq!(mapped.mouth_close, 0.0);
     }
 
     #[test]
-    fn maps_closed_to_arkit_mouth_close_without_legacy_vowel() {
+    fn maps_closed_to_arkit_mouth_close() {
         let mut frame = LipSyncFrame::default();
         frame.posterior = [0.02, 0.86, 0.02, 0.01, 0.01, 0.01, 0.01, 0.02, 0.04];
 
         let mapped = map_frame(&frame, LIPSYNC_MAPPER_ARKIT).unwrap();
 
         assert_eq!(mapped.best_class, LipSyncClass::Closed as u32);
-        assert_eq!(mapped.legacy_vowel, -1);
         assert!(mapped.mouth_close > 0.8);
         assert!(mapped.aa < 0.1);
     }

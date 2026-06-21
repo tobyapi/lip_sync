@@ -13,7 +13,6 @@ pub const LIPSYNC_FLAG_GMM: u32 = 1 << 4;
 
 const FRAME_SIZE: usize = 1024;
 const EPSILON: f32 = 1.0e-8;
-const VOWEL_CONFIDENCE_THRESHOLD: f32 = 0.34;
 const SILENCE_RMS: f32 = 0.0005;
 const DEFAULT_METADATA_WEIGHT: f32 = 0.55;
 const DEFAULT_SMOOTHING: f32 = 0.18;
@@ -457,10 +456,6 @@ impl LipSyncFrame {
     pub fn best_class_score(&self) -> f32 {
         self.posterior[self.best_class() as usize]
     }
-
-    pub fn legacy_vowel(&self) -> Option<Vowel> {
-        legacy_vowel_from_class(self.best_class())
-    }
 }
 
 pub fn lip_sync_class_from_index(index: u32) -> Option<LipSyncClass> {
@@ -474,17 +469,6 @@ pub fn lip_sync_class_from_index(index: u32) -> Option<LipSyncClass> {
         6 => Some(LipSyncClass::O),
         7 => Some(LipSyncClass::Fricative),
         8 => Some(LipSyncClass::Other),
-        _ => None,
-    }
-}
-
-pub fn legacy_vowel_from_class(class: LipSyncClass) -> Option<Vowel> {
-    match class {
-        LipSyncClass::A => Some(Vowel::A),
-        LipSyncClass::I => Some(Vowel::I),
-        LipSyncClass::U => Some(Vowel::U),
-        LipSyncClass::E => Some(Vowel::E),
-        LipSyncClass::O => Some(Vowel::O),
         _ => None,
     }
 }
@@ -1136,14 +1120,6 @@ fn analyze_vowel_evidence_with_classifier_features(
         f1_hz,
         f2_hz,
     }
-}
-
-pub fn recognize_vowel_from_pcm(pcm_data: &[f32], sample_rate: u32) -> Option<Vowel> {
-    let evidence = analyze_vowel_evidence(pcm_data, sample_rate);
-    if evidence.confidence < VOWEL_CONFIDENCE_THRESHOLD {
-        return None;
-    }
-    Some(best_vowel_from_scores(evidence.scores))
 }
 
 pub fn best_vowel_from_scores(scores: [f32; NUM_VOWELS]) -> Vowel {
@@ -1972,13 +1948,6 @@ mod tests {
             .sum::<f32>();
         assert_scores_normalized(tiny);
         assert!(difference > 0.001);
-    }
-
-    #[test]
-    fn recognize_vowel_uses_evidence_wrapper_without_panicking() {
-        let pcm = synthetic_vowel_like_signal(0.5, &[(120.0, 0.35), (720.0, 1.0), (1150.0, 0.75)]);
-        let result = recognize_vowel_from_pcm(&pcm, SAMPLE_RATE);
-        assert!(result.is_some());
     }
 
     #[test]

@@ -22,7 +22,7 @@ Assets/Plugins/x86_64/lip_sync.dll
 
 ## 9-Class and Mapper Output
 
-`LipSyncFrame` is the main output and uses the Rust SDK's 9-class posterior: `REST`, `CLOSED`, `A`, `I`, `U`, `E`, `O`, `FRICATIVE`, `OTHER`. The old `LipSyncVowel` AIUEO API remains for compatibility only.
+`LipSyncFrame` is the main output and uses the Rust SDK's 9-class posterior: `REST`, `CLOSED`, `A`, `I`, `U`, `E`, `O`, `FRICATIVE`, `OTHER`.
 
 Use `LipSync.TryMapFrame` or the `CurrentMappedFrame` property on `MicrophoneLipSyncAnalyzer` to consume native mapper output. `LipSyncMapperKind.Vrm` fills `aa`, `ih`, `ou`, `ee`, and `oh`; `Arkit` and `MetaHuman` also fill mouth curve fields such as `mouthClose`, `mouthFunnel`, `mouthPucker`, and `mouthWide`.
 
