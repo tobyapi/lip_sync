@@ -487,6 +487,72 @@ impl LipSyncDebugFrame {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct AnalysisRing {
+    audio: Vec<f32>,
+    total_samples_seen: usize,
+    next_analysis_end_sample: usize,
+    previous_window_end_sample: usize,
+    last_window_end_sample: usize,
+}
+
+impl AnalysisRing {
+    fn push(&mut self, pcm_data: &[f32], capacity: usize) {
+        self.audio
+            .extend(pcm_data.iter().map(|sample| sample.clamp(-1.0, 1.0)));
+        self.total_samples_seen = self.total_samples_seen.saturating_add(pcm_data.len());
+        if self.audio.len() > capacity {
+            let overflow = self.audio.len() - capacity;
+            self.audio.drain(0..overflow);
+        }
+    }
+
+    fn has_enough_samples(&self, window_samples: usize) -> bool {
+        self.total_samples_seen >= window_samples
+    }
+
+    fn next_due_window(&mut self, window_samples: usize, hop_samples: usize) -> Option<Vec<f32>> {
+        if !self.has_enough_samples(window_samples) {
+            return None;
+        }
+        if self.next_analysis_end_sample < window_samples {
+            self.next_analysis_end_sample = window_samples;
+        }
+
+        while self.next_analysis_end_sample <= self.total_samples_seen {
+            let end_sample = self.next_analysis_end_sample;
+            self.next_analysis_end_sample =
+                self.next_analysis_end_sample.saturating_add(hop_samples);
+            if let Some(window) = self.window_ending_at(end_sample, window_samples) {
+                self.previous_window_end_sample = self.last_window_end_sample;
+                self.last_window_end_sample = end_sample;
+                return Some(window);
+            }
+        }
+        None
+    }
+
+    fn window_ending_at(&self, end_sample: usize, window_samples: usize) -> Option<Vec<f32>> {
+        if end_sample < window_samples || end_sample > self.total_samples_seen {
+            return None;
+        }
+        let ring_start_sample = self.total_samples_seen.saturating_sub(self.audio.len());
+        if end_sample < ring_start_sample {
+            return None;
+        }
+        let end_index = end_sample - ring_start_sample;
+        let start_index = end_index.checked_sub(window_samples)?;
+        if end_index > self.audio.len() {
+            return None;
+        }
+        Some(self.audio[start_index..end_index].to_vec())
+    }
+
+    fn len(&self) -> usize {
+        self.audio.len()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LipSyncAnalyzer {
     options: LipSyncOptions,
@@ -502,11 +568,7 @@ pub struct LipSyncAnalyzer {
     hold_time_seconds: f32,
     previous_time_step_seconds: f32,
     last_switch_confidence: f32,
-    audio_ring: Vec<f32>,
-    total_samples_seen: usize,
-    next_analysis_end_sample: usize,
-    previous_analysis_window_end_sample: usize,
-    last_analysis_window_end_sample: usize,
+    stream: AnalysisRing,
     latest_frame: LipSyncFrame,
     latest_debug_frame: LipSyncDebugFrame,
     analysis_count: usize,
@@ -541,11 +603,7 @@ impl LipSyncAnalyzer {
             hold_time_seconds: 0.0,
             previous_time_step_seconds: 0.0,
             last_switch_confidence: 1.0,
-            audio_ring: Vec::new(),
-            total_samples_seen: 0,
-            next_analysis_end_sample: 0,
-            previous_analysis_window_end_sample: 0,
-            last_analysis_window_end_sample: 0,
+            stream: AnalysisRing::default(),
             latest_frame: LipSyncFrame::default(),
             latest_debug_frame: LipSyncDebugFrame::default(),
             analysis_count: 0,
@@ -591,66 +649,22 @@ impl LipSyncAnalyzer {
             return self.latest_debug_frame;
         }
 
-        self.append_audio_to_ring(pcm_data);
-        self.total_samples_seen = self.total_samples_seen.saturating_add(pcm_data.len());
+        let ring_capacity_samples = self.ring_capacity_samples();
+        self.stream.push(pcm_data, ring_capacity_samples);
         let window_samples = self.analysis_window_samples();
         let hop_samples = self.analysis_hop_samples();
-        if self.total_samples_seen < window_samples {
+        if !self.stream.has_enough_samples(window_samples) {
             self.latest_frame = LipSyncFrame::default();
             self.latest_debug_frame = LipSyncDebugFrame::default();
             return self.latest_debug_frame;
         }
 
-        if self.next_analysis_end_sample < window_samples {
-            self.next_analysis_end_sample = window_samples;
-        }
-
-        while self.next_analysis_end_sample <= self.total_samples_seen {
-            if let Some(window) =
-                self.analysis_window_ending_at(self.next_analysis_end_sample, window_samples)
-            {
-                self.latest_debug_frame = self.analyze_pcm_window(&window, time_seconds);
-                self.latest_frame = self.latest_debug_frame.frame;
-                self.previous_analysis_window_end_sample = self.last_analysis_window_end_sample;
-                self.last_analysis_window_end_sample = self.next_analysis_end_sample;
-            }
-            self.next_analysis_end_sample =
-                self.next_analysis_end_sample.saturating_add(hop_samples);
+        while let Some(window) = self.stream.next_due_window(window_samples, hop_samples) {
+            self.latest_debug_frame = self.analyze_pcm_window(&window, time_seconds);
+            self.latest_frame = self.latest_debug_frame.frame;
         }
 
         self.latest_debug_frame
-    }
-
-    fn append_audio_to_ring(&mut self, pcm_data: &[f32]) {
-        self.audio_ring
-            .extend(pcm_data.iter().map(|sample| sample.clamp(-1.0, 1.0)));
-        let capacity = self.ring_capacity_samples();
-        if self.audio_ring.len() > capacity {
-            let overflow = self.audio_ring.len() - capacity;
-            self.audio_ring.drain(0..overflow);
-        }
-    }
-
-    fn analysis_window_ending_at(
-        &self,
-        end_sample: usize,
-        window_samples: usize,
-    ) -> Option<Vec<f32>> {
-        if end_sample < window_samples || end_sample > self.total_samples_seen {
-            return None;
-        }
-        let ring_start_sample = self
-            .total_samples_seen
-            .saturating_sub(self.audio_ring.len());
-        if end_sample < ring_start_sample {
-            return None;
-        }
-        let end_index = end_sample - ring_start_sample;
-        let start_index = end_index.checked_sub(window_samples)?;
-        if end_index > self.audio_ring.len() {
-            return None;
-        }
-        Some(self.audio_ring[start_index..end_index].to_vec())
     }
 
     fn analysis_window_samples(&self) -> usize {
@@ -2120,8 +2134,8 @@ mod tests {
 
         analyzer.process(&chunk);
         assert_eq!(analyzer.analysis_count, 2);
-        assert_eq!(analyzer.previous_analysis_window_end_sample, 400);
-        assert_eq!(analyzer.last_analysis_window_end_sample, 560);
+        assert_eq!(analyzer.stream.previous_window_end_sample, 400);
+        assert_eq!(analyzer.stream.last_window_end_sample, 560);
     }
 
     #[test]
@@ -2159,7 +2173,7 @@ mod tests {
         for _ in 0..100 {
             analyzer.process(&chunk);
         }
-        assert!(analyzer.audio_ring.len() <= capacity);
+        assert!(analyzer.stream.len() <= capacity);
     }
 
     #[test]
