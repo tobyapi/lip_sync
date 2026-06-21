@@ -38,26 +38,178 @@ const BANDS_HZ: [(f32, f32); NUM_BANDS] = [
     (5000.0, 7000.0),
 ];
 
-const VOWEL_PROTOTYPES: [[f32; NUM_BANDS]; NUM_VOWELS] = [
+const NUM_VOWEL_PROTOTYPES: usize = 8;
+const MULTI_PROTOTYPE_TEMPERATURE: f32 = 6.0;
+const VOWEL_PROTOTYPES: [[[f32; NUM_BANDS]; NUM_VOWEL_PROTOTYPES]; NUM_VOWELS] = [
     [
-        0.1, 0.2, 0.45, 0.8, 1.15, 1.35, 1.05, 0.85, 0.55, 0.25, 0.0, -0.25, -0.45, -0.65, -0.85,
-        -1.0,
+        [
+            0.1, 0.2, 0.45, 0.8, 1.15, 1.35, 1.05, 0.85, 0.55, 0.25, 0.0, -0.25, -0.45, -0.65,
+            -0.85, -1.0,
+        ],
+        [
+            0.26, 0.34, 0.57, 0.9, 1.21, 1.39, 1.07, 0.85, 0.53, 0.21, -0.06, -0.33, -0.55, -0.77,
+            -0.99, -1.16,
+        ],
+        [
+            -0.06, 0.06, 0.33, 0.7, 1.09, 1.31, 1.03, 0.85, 0.57, 0.29, 0.06, -0.17, -0.35, -0.53,
+            -0.71, -0.84,
+        ],
+        [
+            0.146, 0.222, 0.427, 0.718, 1.009, 1.171, 0.903, 0.721, 0.453, 0.185, -0.04, -0.265,
+            -0.437, -0.609, -0.781, -0.91,
+        ],
+        [
+            0.116, 0.244, 0.506, 0.86, 1.206, 1.37, 1.146, 0.894, 0.59, 0.278, 0.0, -0.262, -0.49,
+            -0.71, -0.922, -1.076,
+        ],
+        [
+            0.22, 0.3, 0.53, 0.86, 1.19, 1.37, 1.05, 0.83, 0.51, 0.19, -0.08, -0.35, -0.57, -0.79,
+            -1.01, -1.18,
+        ],
+        [
+            -0.02, 0.1, 0.37, 0.74, 1.11, 1.33, 1.05, 0.87, 0.59, 0.31, 0.08, -0.15, -0.33, -0.51,
+            -0.69, -0.82,
+        ],
+        [
+            0.134, 0.268, 0.543, 0.832, 1.121, 1.269, 0.967, 0.769, 0.497, 0.235, 0.02, -0.205,
+            -0.403, -0.611, -0.819, -0.98,
+        ],
     ],
     [
-        -0.95, -0.8, -0.65, -0.5, -0.35, -0.15, 0.05, 0.35, 0.75, 1.1, 1.35, 1.5, 1.15, 0.75, 0.25,
-        -0.2,
+        [
+            -0.95, -0.8, -0.65, -0.5, -0.35, -0.15, 0.05, 0.35, 0.75, 1.1, 1.35, 1.5, 1.15, 0.75,
+            0.25, -0.2,
+        ],
+        [
+            -0.79, -0.66, -0.53, -0.4, -0.29, -0.11, 0.07, 0.35, 0.73, 1.06, 1.29, 1.42, 1.05,
+            0.63, 0.11, -0.36,
+        ],
+        [
+            -1.11, -0.94, -0.77, -0.6, -0.41, -0.19, 0.03, 0.35, 0.77, 1.14, 1.41, 1.58, 1.25,
+            0.87, 0.39, -0.04,
+        ],
+        [
+            -0.757, -0.638, -0.519, -0.4, -0.281, -0.119, 0.043, 0.291, 0.625, 0.916, 1.121, 1.24,
+            0.939, 0.595, 0.165, -0.222,
+        ],
+        [
+            -0.926, -0.78, -0.61, -0.44, -0.262, -0.05, 0.146, 0.426, 0.782, 1.104, 1.334, 1.4,
+            1.102, 0.674, 0.178, -0.228,
+        ],
+        [
+            -0.83, -0.7, -0.57, -0.44, -0.31, -0.13, 0.05, 0.33, 0.71, 1.04, 1.27, 1.4, 1.03, 0.61,
+            0.09, -0.38,
+        ],
+        [
+            -1.07, -0.9, -0.73, -0.56, -0.39, -0.17, 0.05, 0.37, 0.79, 1.16, 1.43, 1.6, 1.27, 0.89,
+            0.41, -0.02,
+        ],
+        [
+            -0.853, -0.672, -0.491, -0.39, -0.289, -0.141, 0.027, 0.299, 0.685, 1.034, 1.289, 1.44,
+            1.101, 0.705, 0.215, -0.228,
+        ],
     ],
     [
-        0.65, 1.05, 1.25, 1.05, 0.8, 0.45, 0.15, -0.1, -0.3, -0.5, -0.75, -0.95, -1.1, -1.2, -1.25,
-        -1.3,
+        [
+            0.65, 1.05, 1.25, 1.05, 0.8, 0.45, 0.15, -0.1, -0.3, -0.5, -0.75, -0.95, -1.1, -1.2,
+            -1.25, -1.3,
+        ],
+        [
+            0.81, 1.19, 1.37, 1.15, 0.86, 0.49, 0.17, -0.1, -0.32, -0.54, -0.81, -1.03, -1.2,
+            -1.32, -1.39, -1.46,
+        ],
+        [
+            0.49, 0.91, 1.13, 0.95, 0.74, 0.41, 0.13, -0.1, -0.28, -0.46, -0.69, -0.87, -1.0,
+            -1.08, -1.11, -1.14,
+        ],
+        [
+            0.619, 0.953, 1.115, 0.933, 0.708, 0.397, 0.129, -0.096, -0.278, -0.46, -0.685, -0.867,
+            -0.996, -1.082, -1.125, -1.168,
+        ],
+        [
+            0.714, 1.038, 1.226, 1.102, 0.864, 0.558, 0.238, -0.032, -0.26, -0.488, -0.742, -0.962,
+            -1.132, -1.252, -1.33, -1.392,
+        ],
+        [
+            0.77, 1.15, 1.33, 1.11, 0.84, 0.47, 0.15, -0.12, -0.34, -0.56, -0.83, -1.05, -1.22,
+            -1.34, -1.41, -1.48,
+        ],
+        [
+            0.53, 0.95, 1.17, 0.99, 0.76, 0.43, 0.15, -0.08, -0.26, -0.44, -0.67, -0.85, -0.98,
+            -1.06, -1.09, -1.12,
+        ],
+        [
+            0.651, 1.067, 1.295, 1.067, 0.792, 0.423, 0.121, -0.124, -0.302, -0.47, -0.685, -0.863,
+            -1.014, -1.128, -1.195, -1.262,
+        ],
     ],
     [
-        -0.35, -0.15, 0.05, 0.3, 0.55, 0.75, 0.85, 0.95, 1.1, 1.15, 0.95, 0.65, 0.25, -0.15, -0.5,
-        -0.8,
+        [
+            -0.35, -0.15, 0.05, 0.3, 0.55, 0.75, 0.85, 0.95, 1.1, 1.15, 0.95, 0.65, 0.25, -0.15,
+            -0.5, -0.8,
+        ],
+        [
+            -0.19, -0.01, 0.17, 0.4, 0.61, 0.79, 0.87, 0.95, 1.08, 1.11, 0.89, 0.57, 0.15, -0.27,
+            -0.64, -0.96,
+        ],
+        [
+            -0.51, -0.29, -0.07, 0.2, 0.49, 0.71, 0.83, 0.95, 1.12, 1.19, 1.01, 0.73, 0.35, -0.03,
+            -0.36, -0.64,
+        ],
+        [
+            -0.241, -0.079, 0.083, 0.288, 0.493, 0.655, 0.731, 0.807, 0.926, 0.959, 0.777, 0.509,
+            0.165, -0.179, -0.48, -0.738,
+        ],
+        [
+            -0.318, -0.13, 0.098, 0.36, 0.622, 0.834, 0.93, 1.018, 1.124, 1.13, 0.934, 0.614, 0.21,
+            -0.202, -0.572, -0.852,
+        ],
+        [
+            -0.23, -0.05, 0.13, 0.36, 0.59, 0.77, 0.85, 0.93, 1.06, 1.09, 0.87, 0.55, 0.13, -0.29,
+            -0.66, -0.98,
+        ],
+        [
+            -0.47, -0.25, -0.03, 0.24, 0.51, 0.73, 0.85, 0.97, 1.14, 1.21, 1.03, 0.75, 0.37, -0.01,
+            -0.34, -0.62,
+        ],
+        [
+            -0.289, -0.061, 0.167, 0.362, 0.557, 0.705, 0.779, 0.863, 1.014, 1.081, 0.913, 0.641,
+            0.255, -0.141, -0.49, -0.792,
+        ],
     ],
     [
-        0.35, 0.75, 1.0, 0.95, 0.85, 0.7, 0.5, 0.3, 0.05, -0.15, -0.4, -0.65, -0.85, -1.0, -1.1,
-        -1.2,
+        [
+            0.35, 0.75, 1.0, 0.95, 0.85, 0.7, 0.5, 0.3, 0.05, -0.15, -0.4, -0.65, -0.85, -1.0,
+            -1.1, -1.2,
+        ],
+        [
+            0.51, 0.89, 1.12, 1.05, 0.91, 0.74, 0.52, 0.3, 0.03, -0.19, -0.46, -0.73, -0.95, -1.12,
+            -1.24, -1.36,
+        ],
+        [
+            0.19, 0.61, 0.88, 0.85, 0.79, 0.66, 0.48, 0.3, 0.07, -0.11, -0.34, -0.57, -0.75, -0.88,
+            -0.96, -1.04,
+        ],
+        [
+            0.361, 0.695, 0.9, 0.847, 0.751, 0.612, 0.43, 0.248, 0.023, -0.159, -0.384, -0.609,
+            -0.781, -0.91, -0.996, -1.082,
+        ],
+        [
+            0.414, 0.746, 0.992, 1.002, 0.922, 0.792, 0.58, 0.352, 0.098, -0.138, -0.4, -0.662,
+            -0.882, -1.052, -1.18, -1.284,
+        ],
+        [
+            0.47, 0.85, 1.08, 1.01, 0.89, 0.72, 0.5, 0.28, 0.01, -0.21, -0.48, -0.75, -0.97, -1.14,
+            -1.26, -1.38,
+        ],
+        [
+            0.23, 0.65, 0.92, 0.89, 0.81, 0.68, 0.5, 0.32, 0.09, -0.09, -0.32, -0.55, -0.73, -0.86,
+            -0.94, -1.02,
+        ],
+        [
+            0.369, 0.785, 1.06, 0.973, 0.839, 0.658, 0.45, 0.252, 0.027, -0.141, -0.356, -0.581,
+            -0.779, -0.94, -1.054, -1.168,
+        ],
     ],
 ];
 
@@ -524,15 +676,7 @@ pub fn analyze_vowel_evidence_with_options(
         };
     }
 
-    let mut similarities = [0.0; NUM_VOWELS];
-    for vowel_index in 0..NUM_VOWELS {
-        similarities[vowel_index] = cosine_similarity(
-            &profile.normalized_bands,
-            &normalized_prototype(VOWEL_PROTOTYPES[vowel_index]),
-        );
-    }
-
-    let mut scores = softmax(similarities, 5.0);
+    let mut scores = multi_prototype_scores(&profile.normalized_bands);
     if options.tiny_nn_enabled() {
         let nn_scores = tiny_nn_scores(&profile);
         blend_distribution(&mut scores, &nn_scores, 0.35);
@@ -772,6 +916,38 @@ fn compensate_compressed_feature(
 
     normalize_feature(compensated)
 }
+fn multi_prototype_scores(feature: &[f32; NUM_BANDS]) -> [f32; NUM_VOWELS] {
+    let mut logits = [0.0; NUM_VOWELS];
+    for vowel_index in 0..NUM_VOWELS {
+        let mut prototype_logits = [0.0; NUM_VOWEL_PROTOTYPES];
+        for prototype_index in 0..NUM_VOWEL_PROTOTYPES {
+            let prototype = normalized_prototype(VOWEL_PROTOTYPES[vowel_index][prototype_index]);
+            prototype_logits[prototype_index] =
+                cosine_similarity(feature, &prototype) * MULTI_PROTOTYPE_TEMPERATURE;
+        }
+        logits[vowel_index] = logsumexp(&prototype_logits);
+    }
+    softmax(logits, 1.0)
+}
+
+fn logsumexp(values: &[f32]) -> f32 {
+    if values.is_empty() {
+        return f32::NEG_INFINITY;
+    }
+    let mut max_value = f32::NEG_INFINITY;
+    for value in values {
+        max_value = max_value.max(*value);
+    }
+    if !max_value.is_finite() {
+        return max_value;
+    }
+    let mut sum = 0.0;
+    for value in values {
+        sum += (*value - max_value).exp();
+    }
+    max_value + (sum + EPSILON).ln()
+}
+
 fn normalized_prototype(prototype: [f32; NUM_BANDS]) -> [f32; NUM_BANDS] {
     normalize_feature(prototype)
 }
@@ -1050,6 +1226,61 @@ mod tests {
         let evidence = analyze_vowel_evidence(&pcm, SAMPLE_RATE);
         assert!(evidence.confidence < 0.05);
         assert_scores_normalized(evidence.scores);
+    }
+
+    #[test]
+    fn multi_prototype_table_has_expected_shape() {
+        assert_eq!(VOWEL_PROTOTYPES.len(), NUM_VOWELS);
+        for prototypes in VOWEL_PROTOTYPES.iter() {
+            assert_eq!(prototypes.len(), NUM_VOWEL_PROTOTYPES);
+        }
+    }
+
+    #[test]
+    fn multi_prototype_scores_are_normalized() {
+        let feature = normalize_feature(VOWEL_PROTOTYPES[Vowel::A as usize][0]);
+        let scores = multi_prototype_scores(&feature);
+        assert_scores_normalized(scores);
+        assert_eq!(best_vowel_from_scores(scores), Vowel::A);
+    }
+
+    #[test]
+    fn multi_prototype_scoring_handles_zero_feature() {
+        let scores = multi_prototype_scores(&[0.0; NUM_BANDS]);
+        assert_scores_normalized(scores);
+    }
+
+    #[test]
+    fn synthetic_vowel_like_signals_produce_non_uniform_scores() {
+        let signals = [
+            synthetic_vowel_like_signal(0.45, &[(120.0, 0.35), (720.0, 1.0), (1150.0, 0.75)]),
+            synthetic_vowel_like_signal(0.45, &[(180.0, 0.25), (2200.0, 1.0), (3100.0, 0.6)]),
+            synthetic_vowel_like_signal(0.45, &[(100.0, 0.7), (260.0, 1.0), (460.0, 0.8)]),
+            synthetic_vowel_like_signal(0.45, &[(160.0, 0.25), (550.0, 0.8), (1900.0, 1.0)]),
+            synthetic_vowel_like_signal(0.45, &[(120.0, 0.5), (430.0, 1.0), (900.0, 0.8)]),
+        ];
+        for signal in signals {
+            let scores = analyze_vowel_evidence(&signal, SAMPLE_RATE).scores;
+            assert_scores_normalized(scores);
+            let (best, second) = best_two(scores);
+            assert!(best > second + 0.01, "scores were too uniform: {scores:?}");
+        }
+    }
+
+    #[test]
+    fn small_eq_tilt_keeps_best_vowel_stable() {
+        for vowel_index in 0..NUM_VOWELS {
+            let base = normalize_feature(VOWEL_PROTOTYPES[vowel_index][0]);
+            let mut tilted = base;
+            for (band, value) in tilted.iter_mut().enumerate() {
+                let position = band as f32 / (NUM_BANDS - 1) as f32;
+                *value += (position - 0.5) * 0.12;
+            }
+            tilted = normalize_feature(tilted);
+            let base_best = best_vowel_from_scores(multi_prototype_scores(&base));
+            let tilted_best = best_vowel_from_scores(multi_prototype_scores(&tilted));
+            assert_eq!(base_best, tilted_best);
+        }
     }
 
     #[test]
