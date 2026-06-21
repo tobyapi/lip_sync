@@ -1,114 +1,114 @@
-# Lip Sync Analysis Library
+# Lip Sync Analysis SDK
 
-A Rust library for performing lip-sync analysis on audio data, with a focus on vowel recognition.
+A profile-free, low-latency Rust lip-sync core with a C ABI and Unity binding sources. The SDK analyzes normalized PCM frames and returns a 9-class posterior plus `jaw_open` without requiring per-user MFCC/profile recording.
 
-## Features
+Implemented scope in this repository:
 
-- **Vowel Recognition**: Identifies vowels (A, I, U, E, O) from raw PCM audio data.
-- **LPC Analysis**: Implements Linear Predictive Coding (LPC) analysis, including autocorrelation, Levinson-Durbin algorithm, and conversion to cepstrum.
-- **Formant Analysis**: Detects formants from the LPC spectrum.
-- **Advanced Vowel Mapping**: Uses complex, non-convex polygons for robust F1/F2 formant mapping to vowels.
-- **Noise Reduction**: Includes multiple strategies for noise reduction:
-    - Voiced/Unvoiced frame detection.
-    - Experimental zero-phase (cepstral) filtering.
-- **Cross-Platform**: Written in Rust, can be compiled for multiple platforms.
-- **C FFI**: Exposes a C-compatible foreign function interface (FFI) for easy integration with other languages.
+- Profile-free spectral-envelope vowel evidence.
+- Low-latency 1024-sample frame analysis.
+- C ABI suitable for native plugins and engine bindings.
+- Unity binding source under `bindings/unity`.
+- Singing mode smoothing for sustained notes and slower vowel transitions.
+- Loud voice / shouting / compressed-audio robustness through RMS normalization, soft limiting, clipping/crest detection, adaptive loudness tracking, and compressed-voice posterior priors.
+- Optional tiny NN blend over normalized spectral features.
+- TTS viseme metadata and lyric timing fusion through timed class cues.
+- Legacy single-vowel C ABI for compatibility.
 
-## Building
+Not implemented here:
 
-This project is a Rust library that compiles to a dynamic library (`.dll`, `.so`, `.dylib`).
+- Unreal integration.
+- VRM mapper.
+- ARKit mapper.
+- MetaHuman mapper.
 
-### Windows (Cross-compilation from Linux)
+## Rust Build
 
-To build the Windows DLL from a Debian-based Linux environment, you need the MinGW toolchain.
+```sh
+cargo test
+cargo build --release
+```
 
-1.  **Install Toolchain:**
-    ```sh
-    sudo apt-get update
-    sudo apt-get install gcc-mingw-w64-x86-64
-    ```
+The Windows DLL is emitted at:
 
-2.  **Add Rust Target:**
-    ```sh
-    rustup target add x86_64-pc-windows-gnu
-    ```
+```text
+target/release/lip_sync.dll
+```
 
-3.  **Build:**
-    ```sh
-    cargo build --release --target x86_64-pc-windows-gnu
-    ```
-    The final DLL will be located at `target/x86_64-pc-windows-gnu/release/lip_sync.dll`.
+For Unity usage, copy the DLL to:
 
-## Usage (C FFI)
+```text
+Assets/Plugins/x86_64/lip_sync.dll
+```
 
-The library exposes the following C-compatible functions.
+## Output Classes
 
-### `recognize_vowel`
+`LipSyncFrame.posterior` contains probabilities in this order:
 
-Analyzes a chunk of PCM audio data and attempts to recognize the vowel being spoken.
+```text
+REST, CLOSED, A, I, U, E, O, FRICATIVE, OTHER
+```
 
-**Signature:**
+The frame also includes:
+
+- `jaw_open`: normalized mouth opening estimate.
+- `vowel_confidence`: confidence for the A/I/U/E/O evidence.
+- `f1_hz`, `f2_hz`: debug/visualization formant estimates only.
+
+## Options
+
+```c
+typedef struct {
+    uint32_t sample_rate;
+    uint32_t flags;
+    float metadata_weight;
+    float smoothing;
+    float loudness_adaptation;
+} LipSyncOptions;
+```
+
+Flags:
+
+```text
+1 << 0  Singing mode
+1 << 1  Optional tiny NN
+1 << 2  Timed cues / metadata fusion
+1 << 3  Robust loudness handling
+```
+
+## C ABI
+
+Legacy compatibility:
+
 ```c
 bool recognize_vowel(const float* pcm, size_t len, uint32_t sample_rate, Vowel* result);
 ```
 
--   `pcm`: A pointer to an array of `float` audio samples, normalized between -1.0 and 1.0.
--   `len`: The number of samples in the `pcm` array.
--   `sample_rate`: The sample rate of the audio (e.g., 44100).
--   `result`: A pointer to a `Vowel` enum where the result will be stored.
--   **Returns:** `true` if a vowel was successfully recognized, `false` otherwise (e.g., if the frame was determined to be unvoiced or no vowel could be classified).
+Stateful SDK API:
 
-**`Vowel` Enum:**
 ```c
-typedef enum {
-    A = 0,
-    I = 1,
-    U = 2,
-    E = 3,
-    O = 4,
-} Vowel;
+LipSyncAnalyzer* lipsync_create(uint32_t sample_rate, bool singing_mode);
+LipSyncAnalyzer* lipsync_create_with_options(LipSyncOptions options);
+bool lipsync_process(LipSyncAnalyzer* analyzer, const float* pcm, size_t len, LipSyncFrame* result);
+bool lipsync_process_at_time(LipSyncAnalyzer* analyzer, const float* pcm, size_t len, float time_seconds, LipSyncFrame* result);
+bool lipsync_set_timed_cues(LipSyncAnalyzer* analyzer, const LipSyncTimedCue* cues, size_t len);
+bool lipsync_clear_timed_cues(LipSyncAnalyzer* analyzer);
+void lipsync_destroy(LipSyncAnalyzer* analyzer);
 ```
 
-## Usage (Unity C#)
+Timed cues use `class_index` values from the 9-class order. Cue kind `1` is TTS viseme metadata and kind `2` is lyric timing. Metadata is blended with audio posterior using `metadata_weight`; lyric cues are slightly softer than TTS viseme cues.
 
-Here is an example of how to call the `recognize_vowel` function from C# in Unity.
+## Unity Usage
 
-1.  Build the `lip_sync.dll` for your target platform (e.g., Windows x86_64) and place it in the `Assets/Plugins` folder of your Unity project.
-2.  Use the following C# script to interface with the library.
+See `bindings/unity` for the C# wrapper and microphone analyzer component. The wrapper imports the native plugin as `lip_sync`, so the Unity plugin DLL should be named `lip_sync.dll` on Windows.
 
-```csharp
-using System;
-using System.Runtime.InteropServices;
-using UnityEngine;
+Important Unity options:
 
-public enum Vowel
-{
-    A,
-    I,
-    U,
-    E,
-    O
-}
+- `singingMode`: smoother transitions and jaw movement for sustained vocals.
+- `enableTinyNn`: blends the optional tiny NN with prototype matching.
+- `robustLoudness`: enables shout/compressor-oriented normalization and adaptive gates.
+- `metadataWeight`: controls TTS/lyric timed cue influence.
+- `useAudioSourceTimeForTimedCues`: uses `AudioSource.time` for metadata lookup.
 
-public class LipSync
-{
-    public static bool TryRecognizeVowel(float[] pcm, int sampleRate, out Vowel vowel)
-    {
-        return Bindings.recognize_vowel(pcm, (UIntPtr)pcm.Length, (uint)sampleRate, out vowel);
-    }
+## Classifier Notes
 
-    static class Bindings
-    {
-        [DllImport("lip_sync")]
-        internal static extern bool recognize_vowel(float[] pcm_data, UIntPtr len, uint sample_rate, out Vowel result);
-    }
-}
-```
-
-## Modules
-
--   `lpc`: Core Linear Predictive Coding (LPC) functions like `autocorrelate`, `levinson_durbin`, etc.
--   `vowel`: Contains the main vowel recognition logic, including formant detection, voiced/unvoiced detection, and F1/F2 mapping.
--   `geometry`: Helper functions for computational geometry, such as point-in-polygon tests for formant mapping.
--   `zero_phase`: Experimental noise reduction based on cepstral processing.
--   `lattice`: Implementation of LPC lattice filters for analysis and synthesis (currently not exposed in the public API).
+The main vowel evidence path is normalized log band-energy prototype matching, optionally blended with a tiny NN. The classifier intentionally does not use F1/F2 polygon mapping. LPC/formants remain only as debug and auxiliary evidence.

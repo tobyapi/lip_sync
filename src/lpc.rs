@@ -110,7 +110,8 @@ pub fn lpc_to_cepstrum(alpha: &[f32], err: f32, num_coeffs: usize) -> Vec<f32> {
     for m in 1..num_coeffs {
         let mut sum = 0.0;
         for k in 1..m {
-            if k < a.len() { // Ensure k is within bounds for a
+            if k < a.len() {
+                // Ensure k is within bounds for a
                 sum += a[k] * c[m - k];
             }
         }
@@ -204,67 +205,37 @@ pub fn cepstrum_to_lpc(cepstrum: &[f32], lpc_order: usize) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hound::WavReader;
 
     #[test]
     fn test_lpc_chain() {
-        // This is an integration test for the LPC analysis chain.
-        // It's based on the test_cepstrum from lib.rs.
-
-        // --- 1. Read audio file ---
-        let mut reader = WavReader::open("testdata/test.wav").unwrap();
-        let samples: Vec<f32> = reader
-            .samples::<i16>()
-            .map(|s| s.unwrap() as f32 / i16::MAX as f32)
+        let sample_rate = 44_100.0;
+        let chunk_size = 1024;
+        let mut signal_chunk: Vec<f32> = (0..chunk_size)
+            .map(|index| {
+                let time = index as f32 / sample_rate;
+                0.4 * (2.0 * std::f32::consts::PI * 220.0 * time).sin()
+                    + 0.2 * (2.0 * std::f32::consts::PI * 880.0 * time).sin()
+            })
             .collect();
 
-        // --- 2. Select analysis frame ---
-        let order = 24;
-        let chunk_size = 1024;
-
-        let num_chunks = samples.len() / chunk_size;
-        let mut best_chunk_start = 0;
-        let mut max_energy = 0.0;
-        for i in 0..num_chunks {
-            let start = i * chunk_size;
-            let end = start + chunk_size;
-            let energy = samples[start..end].iter().map(|&s| s * s).sum();
-            if energy > max_energy {
-                max_energy = energy;
-                best_chunk_start = start;
-            }
-        }
-
-        let mut signal_chunk = samples[best_chunk_start..best_chunk_start + chunk_size].to_vec();
-
-        // --- 3. Pre-process for LPC analysis ---
         hamming_window(&mut signal_chunk);
-
-        // --- 4. Execute cepstrum extraction ---
         let mut acf = autocorrelate(&signal_chunk);
-
         let acf0 = acf[0];
-        if acf0 > 0.0 {
-            for val in &mut acf {
-                *val /= acf0;
-            }
+        assert!(acf0 > 0.0);
+
+        for val in &mut acf {
+            *val /= acf0;
         }
 
-        if let Some((alpha, err)) = levinson_durbin(&acf, order) {
-            let gain = err * acf0;
-            let cepstrum = lpc_to_cepstrum(&alpha, gain, order + 1);
+        let (alpha, err) =
+            levinson_durbin(&acf, 24).expect("LPC should be stable for synthetic voiced signal");
+        let gain = err * acf0;
+        let cepstrum = lpc_to_cepstrum(&alpha, gain, 25);
+        let envelope = lpc_to_spectral_envelope(&alpha, gain, 1024);
 
-            // --- 5. Display results ---
-            println!("Cepstrum Coefficients (first 5):");
-            for (i, &c) in cepstrum.iter().take(5).enumerate() {
-                println!("  c[{}]: {}", i, c);
-            }
-            // Basic assertion to check if cepstrum was calculated
-            assert!(!cepstrum.is_empty());
-            assert_ne!(cepstrum[0], 0.0);
-        } else {
-            panic!("Levinson-Durbin algorithm failed");
-        }
+        assert!(!cepstrum.is_empty());
+        assert_eq!(envelope.len(), 1024);
+        assert!(envelope.iter().all(|value| value.is_finite()));
     }
 
     #[test]
