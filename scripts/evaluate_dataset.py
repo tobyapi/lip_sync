@@ -4,8 +4,7 @@
 The script intentionally uses the Python standard library only. It loads the
 compiled native library with ctypes, scans a simple dataset layout, writes a
 per-frame CSV, and writes summary metrics that make classifier changes easier
-to compare without claiming accuracy from synthetic tests alone. The placeholder
-GMM path is infrastructure only and is not an accuracy-improvement mode.
+to compare without claiming accuracy from synthetic tests alone. The GMM path becomes meaningful once a trained 16-band model is exported into src/trained_band_gmm.rs; otherwise it falls back to the placeholder model.
 """
 
 from __future__ import annotations
@@ -446,7 +445,7 @@ def write_outputs(rows: list[dict[str, object]], summary: dict[str, object], out
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Evaluate lip_sync on labeled WAV clips.",
-        epilog="Note: --gmm enables the placeholder spectral-GMM infrastructure path. It is not an accuracy-improvement mode and should not be used for accuracy claims until replaced by a trained model.",
+        epilog="Note: --gmm evaluates the trained 16-band spectral GMM after src/trained_band_gmm.rs is generated. Empty generated arrays fall back to the placeholder model.",
     )
     parser.add_argument("--library", required=True, type=Path, help="Path to compiled lip_sync native library")
     parser.add_argument("--dataset", required=True, type=Path, help="Path to testdata/real_audio dataset")
@@ -458,7 +457,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--gmm",
         action="store_true",
-        help="Enable placeholder spectral-GMM infrastructure only; not for accuracy improvement claims",
+        help="Enable the trained 16-band spectral GMM path, with placeholder fallback when no model is generated",
     )
     parser.add_argument("--no-robust-loudness", dest="robust_loudness", action="store_false", help="Disable robust loudness flag")
     parser.set_defaults(robust_loudness=True)

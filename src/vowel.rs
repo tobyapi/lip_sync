@@ -2,6 +2,7 @@ use crate::{
     features::{self, FEATURE_VECTOR_LEN, FeatureExtractor, FeatureVector},
     gmm, lpc,
     normalization::RollingLoudness,
+    trained_band_gmm,
 };
 use num_complex::Complex;
 use rustfft::FftPlanner;
@@ -821,16 +822,7 @@ impl LipSyncAnalyzer {
         let feature_vector = self
             .feature_extractor
             .extract(pcm_data, self.options.sample_rate);
-        let classifier_features: Option<&[f32]> = if self.options.gmm_enabled() {
-            Some(&profile.normalized_bands)
-        } else {
-            None
-        };
-        let evidence = analyze_vowel_evidence_with_classifier_features(
-            pcm_data,
-            self.options,
-            classifier_features,
-        );
+        let evidence = analyze_vowel_evidence_with_options(pcm_data, self.options);
         self.update_loudness_trackers(&profile);
         self.analysis_count += 1;
 
@@ -1169,14 +1161,6 @@ pub fn analyze_vowel_evidence_with_options(
     pcm_data: &[f32],
     options: LipSyncOptions,
 ) -> VowelEvidence {
-    analyze_vowel_evidence_with_classifier_features(pcm_data, options, None)
-}
-
-fn analyze_vowel_evidence_with_classifier_features(
-    pcm_data: &[f32],
-    options: LipSyncOptions,
-    classifier_features: Option<&[f32]>,
-) -> VowelEvidence {
     let options = options.normalized();
     if pcm_data.is_empty() || options.sample_rate == 0 {
         return VowelEvidence::default();
@@ -1194,10 +1178,8 @@ fn analyze_vowel_evidence_with_classifier_features(
 
     let mut scores = match VowelClassifierKind::from_options(options) {
         VowelClassifierKind::MultiPrototype => multi_prototype_scores(&profile.normalized_bands),
-        VowelClassifierKind::DiagonalGmm => classifier_features
-            .and_then(|features| gmm_vowel_scores(features).ok())
-            .or_else(|| gmm_vowel_scores(&profile.normalized_bands).ok())
-            .unwrap_or_else(|| multi_prototype_scores(&profile.normalized_bands)),
+        VowelClassifierKind::DiagonalGmm => gmm_vowel_scores(&profile.normalized_bands)
+            .unwrap_or_else(|_| multi_prototype_scores(&profile.normalized_bands)),
     };
     if options.tiny_nn_enabled() {
         let nn_scores = tiny_nn_scores(&profile);
@@ -1436,7 +1418,7 @@ fn compensate_compressed_feature(
     normalize_feature(compensated)
 }
 fn gmm_vowel_scores(features: &[f32]) -> Result<[f32; NUM_VOWELS], gmm::GmmError> {
-    let model = gmm::placeholder_vowel_gmm();
+    let model = trained_band_gmm::trained_band_vowel_gmm();
     model.posterior_checked::<NUM_VOWELS>(features)
 }
 
@@ -1910,14 +1892,14 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_gmm_rejects_mfcc_feature_vector_length() {
+    fn trained_band_gmm_rejects_mfcc_feature_vector_length() {
         let features = vec![0.0; crate::features::FEATURE_VECTOR_LEN];
         let err = gmm_vowel_scores(&features)
             .expect_err("31-dim MFCC feature vectors must not be accepted by 16-band GMM");
         assert_eq!(
             err,
             gmm::GmmError::FeatureDimensionMismatch {
-                expected: gmm::PLACEHOLDER_GMM_FEATURES,
+                expected: trained_band_gmm::trained_band_vowel_gmm().num_features,
                 actual: crate::features::FEATURE_VECTOR_LEN,
             }
         );

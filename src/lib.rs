@@ -3,6 +3,7 @@ pub mod gmm;
 pub mod lpc;
 pub mod mapper;
 pub mod normalization;
+pub mod trained_band_gmm;
 pub mod vowel;
 
 use crate::mapper::{LipSyncMappedFrame, map_frame};

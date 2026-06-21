@@ -56,4 +56,22 @@ python3 scripts/train_gmm.py \
   --out target/lipsync_eval/gmm.json
 ```
 
-This is a lightweight initializer/export path, not an accuracy guarantee. It needs real labeled feature data exported from the SDK feature extractor before replacing the placeholder model. Use `--feature-set band` for a trained 16-band GMM comparable to the current prototype classifier. Use the default `feature_` prefix for the 31-dim MFCC/delta/spectral/voicing/f0 vector when training a future 31-dim model.
+`--feature-set band` trains only the `A/I/U/E/O` labels in that fixed order, ignoring non-vowel labels in the CSV. Use it for a trained 16-band GMM comparable to the current prototype classifier. Use the default `feature_` prefix for the 31-dim MFCC/delta/spectral/voicing/f0 vector when training a future 31-dim model.
+
+## Rust GMM export
+
+Export a trained band GMM JSON into Rust constants, rebuild, then evaluate with `--gmm`:
+
+```sh
+python3 scripts/export_gmm_rust.py \
+  --input target/lipsync_eval/gmm.json \
+  --out src/trained_band_gmm.rs
+cargo build --release
+python3 scripts/evaluate_dataset.py \
+  --library target/release/liblip_sync.so \
+  --dataset testdata/real_audio \
+  --out target/lipsync_eval_gmm \
+  --gmm
+```
+
+`LIPSYNC_FLAG_GMM` consumes `normalized_bands[16]`. It does not consume the 31-dim `FeatureVector.values`. If `src/trained_band_gmm.rs` still contains empty generated arrays, runtime GMM mode falls back to the placeholder 16-band prototype GMM, which is infrastructure only and not an accuracy model.
