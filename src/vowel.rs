@@ -1,4 +1,8 @@
-use crate::{gmm, lpc, normalization::RollingLoudness};
+use crate::{
+    features::{self, FEATURE_VECTOR_LEN, FeatureExtractor, FeatureVector},
+    gmm, lpc,
+    normalization::RollingLoudness,
+};
 use num_complex::Complex;
 use rustfft::FftPlanner;
 
@@ -10,6 +14,10 @@ pub const LIPSYNC_FLAG_TINY_NN: u32 = 1 << 1;
 pub const LIPSYNC_FLAG_TIMED_CUES: u32 = 1 << 2;
 pub const LIPSYNC_FLAG_ROBUST_LOUDNESS: u32 = 1 << 3;
 pub const LIPSYNC_FLAG_GMM: u32 = 1 << 4;
+pub const LIPSYNC_CLASSIFIER_MULTI_PROTOTYPE: u32 = 0;
+pub const LIPSYNC_CLASSIFIER_DIAGONAL_GMM: u32 = 1;
+pub const LIPSYNC_FEATURE_SPACE_BANDS_16: u32 = 16;
+pub const LIPSYNC_FEATURE_SPACE_VECTOR_31: u32 = 31;
 
 const FRAME_SIZE: usize = 1024;
 const EPSILON: f32 = 1.0e-8;
@@ -373,6 +381,13 @@ impl VowelClassifierKind {
             Self::MultiPrototype
         }
     }
+
+    fn as_u32(self) -> u32 {
+        match self {
+            Self::MultiPrototype => LIPSYNC_CLASSIFIER_MULTI_PROTOTYPE,
+            Self::DiagonalGmm => LIPSYNC_CLASSIFIER_DIAGONAL_GMM,
+        }
+    }
 }
 
 #[repr(C)]
@@ -478,6 +493,11 @@ pub fn lip_sync_class_from_index(index: u32) -> Option<LipSyncClass> {
 pub struct LipSyncDebugFrame {
     pub frame: LipSyncFrame,
     pub vowel_scores: [f32; NUM_VOWELS],
+    pub normalized_bands: [f32; NUM_BANDS],
+    pub feature_vector: [f32; FEATURE_VECTOR_LEN],
+    pub classifier_kind: u32,
+    pub band_feature_space: u32,
+    pub feature_vector_space: u32,
     pub activity: f32,
     pub rms: f32,
     pub high_ratio: f32,
@@ -492,6 +512,11 @@ impl Default for LipSyncDebugFrame {
         Self {
             frame: LipSyncFrame::default(),
             vowel_scores: [0.2; NUM_VOWELS],
+            normalized_bands: [0.0; NUM_BANDS],
+            feature_vector: [0.0; FEATURE_VECTOR_LEN],
+            classifier_kind: LIPSYNC_CLASSIFIER_MULTI_PROTOTYPE,
+            band_feature_space: LIPSYNC_FEATURE_SPACE_BANDS_16,
+            feature_vector_space: LIPSYNC_FEATURE_SPACE_VECTOR_31,
             activity: 0.0,
             rms: 0.0,
             high_ratio: 0.0,
@@ -508,11 +533,18 @@ impl LipSyncDebugFrame {
         frame: LipSyncFrame,
         evidence: VowelEvidence,
         profile: &SpectralProfile,
+        classifier_kind: VowelClassifierKind,
+        feature_vector: &FeatureVector,
         activity: f32,
     ) -> Self {
         Self {
             frame,
             vowel_scores: evidence.scores,
+            normalized_bands: profile.normalized_bands,
+            feature_vector: feature_values_array(feature_vector),
+            classifier_kind: classifier_kind.as_u32(),
+            band_feature_space: LIPSYNC_FEATURE_SPACE_BANDS_16,
+            feature_vector_space: LIPSYNC_FEATURE_SPACE_VECTOR_31,
             activity,
             rms: profile.rms,
             high_ratio: profile.high_ratio,
@@ -528,6 +560,58 @@ impl LipSyncDebugFrame {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct LipSyncTrainingFeatures {
+    pub normalized_bands: [f32; NUM_BANDS],
+    pub feature_vector: [f32; FEATURE_VECTOR_LEN],
+    pub classifier_kind: u32,
+    pub band_feature_space: u32,
+    pub feature_vector_space: u32,
+    pub sample_rate: u32,
+}
+
+impl Default for LipSyncTrainingFeatures {
+    fn default() -> Self {
+        Self {
+            normalized_bands: [0.0; NUM_BANDS],
+            feature_vector: [0.0; FEATURE_VECTOR_LEN],
+            classifier_kind: LIPSYNC_CLASSIFIER_MULTI_PROTOTYPE,
+            band_feature_space: LIPSYNC_FEATURE_SPACE_BANDS_16,
+            feature_vector_space: LIPSYNC_FEATURE_SPACE_VECTOR_31,
+            sample_rate: 0,
+        }
+    }
+}
+
+pub fn extract_training_features_from_pcm(
+    pcm_data: &[f32],
+    options: LipSyncOptions,
+) -> LipSyncTrainingFeatures {
+    let options = options.normalized();
+    if pcm_data.is_empty() || options.sample_rate == 0 {
+        return LipSyncTrainingFeatures::default();
+    }
+
+    let profile = analyze_spectral_profile(pcm_data, options);
+    let feature_vector = features::extract_features(pcm_data, options.sample_rate, None);
+    LipSyncTrainingFeatures {
+        normalized_bands: profile.normalized_bands,
+        feature_vector: feature_values_array(&feature_vector),
+        classifier_kind: VowelClassifierKind::from_options(options).as_u32(),
+        band_feature_space: LIPSYNC_FEATURE_SPACE_BANDS_16,
+        feature_vector_space: LIPSYNC_FEATURE_SPACE_VECTOR_31,
+        sample_rate: options.sample_rate,
+    }
+}
+
+fn feature_values_array(feature_vector: &FeatureVector) -> [f32; FEATURE_VECTOR_LEN] {
+    let mut values = [0.0; FEATURE_VECTOR_LEN];
+    for (target, source) in values.iter_mut().zip(feature_vector.values.iter()) {
+        *target = if source.is_finite() { *source } else { 0.0 };
+    }
+    values
+}
 #[derive(Debug, Clone, Default)]
 struct AnalysisRing {
     audio: Vec<f32>,
@@ -606,6 +690,7 @@ pub struct LipSyncAnalyzer {
     timed_cues: Vec<LipSyncTimedCue>,
     rolling_loudness: RollingLoudness,
     closed_detector: ClosedDetector,
+    feature_extractor: FeatureExtractor,
     current_class: LipSyncClass,
     hold_time_seconds: f32,
     previous_time_step_seconds: f32,
@@ -641,6 +726,7 @@ impl LipSyncAnalyzer {
             timed_cues: Vec::new(),
             rolling_loudness: RollingLoudness::new(),
             closed_detector: ClosedDetector::new(ClosedDetectionMode::UltraLowLatency),
+            feature_extractor: FeatureExtractor::new(),
             current_class: LipSyncClass::Rest,
             hold_time_seconds: 0.0,
             previous_time_step_seconds: 0.0,
@@ -731,6 +817,10 @@ impl LipSyncAnalyzer {
     fn analyze_pcm_window(&mut self, pcm_data: &[f32], time_seconds: f32) -> LipSyncDebugFrame {
         let time_step_seconds = self.time_step_seconds(pcm_data);
         let profile = analyze_spectral_profile(pcm_data, self.options);
+        let classifier_kind = VowelClassifierKind::from_options(self.options);
+        let feature_vector = self
+            .feature_extractor
+            .extract(pcm_data, self.options.sample_rate);
         let classifier_features: Option<&[f32]> = if self.options.gmm_enabled() {
             Some(&profile.normalized_bands)
         } else {
@@ -758,7 +848,14 @@ impl LipSyncAnalyzer {
             }
             self.remember_rest_temporal(time_step_seconds);
             self.remember_frame(&frame);
-            return LipSyncDebugFrame::from_parts(frame, evidence, &profile, 0.0);
+            return LipSyncDebugFrame::from_parts(
+                frame,
+                evidence,
+                &profile,
+                classifier_kind,
+                &feature_vector,
+                0.0,
+            );
         }
 
         let activity = self.activity_score(&profile);
@@ -837,7 +934,14 @@ impl LipSyncAnalyzer {
             f2_hz: evidence.f2_hz,
         };
         self.remember_frame(&frame);
-        LipSyncDebugFrame::from_parts(frame, evidence, &profile, activity)
+        LipSyncDebugFrame::from_parts(
+            frame,
+            evidence,
+            &profile,
+            classifier_kind,
+            &feature_vector,
+            activity,
+        )
     }
 
     fn time_step_seconds(&mut self, pcm_data: &[f32]) -> f32 {

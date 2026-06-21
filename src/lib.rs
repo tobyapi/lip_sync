@@ -8,7 +8,7 @@ pub mod vowel;
 use crate::mapper::{LipSyncMappedFrame, map_frame};
 use crate::vowel::{
     LipSyncAnalyzer, LipSyncDebugFrame, LipSyncFrame, LipSyncOptions, LipSyncTimedCue,
-    lip_sync_class_from_index,
+    LipSyncTrainingFeatures, extract_training_features_from_pcm, lip_sync_class_from_index,
 };
 use libc::size_t;
 use std::slice;
@@ -21,6 +21,26 @@ pub extern "C" fn lipsync_default_options(sample_rate: u32) -> LipSyncOptions {
 #[unsafe(no_mangle)]
 pub extern "C" fn lipsync_singing_options(sample_rate: u32) -> LipSyncOptions {
     LipSyncOptions::singing_preset(sample_rate).normalized()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn lipsync_extract_training_features(
+    pcm: *const f32,
+    len: size_t,
+    options: LipSyncOptions,
+    result: *mut LipSyncTrainingFeatures,
+) -> bool {
+    if pcm.is_null() || result.is_null() || len == 0 || options.sample_rate == 0 {
+        return false;
+    }
+
+    let pcm_data = unsafe { slice::from_raw_parts(pcm, len as usize) };
+    let features = extract_training_features_from_pcm(pcm_data, options);
+
+    unsafe {
+        *result = features;
+    }
+    true
 }
 
 #[unsafe(no_mangle)]
@@ -462,11 +482,67 @@ mod tests {
         assert!(ok);
         assert!(frame.frame.posterior[LipSyncClass::Rest as usize] > 0.9);
         assert!(frame.rms >= 0.0);
+        assert_eq!(
+            frame.band_feature_space,
+            crate::vowel::LIPSYNC_FEATURE_SPACE_BANDS_16
+        );
+        assert_eq!(
+            frame.feature_vector_space,
+            crate::vowel::LIPSYNC_FEATURE_SPACE_VECTOR_31
+        );
+        assert!(frame.normalized_bands.iter().all(|value| value.is_finite()));
+        assert!(frame.feature_vector.iter().all(|value| value.is_finite()));
         assert_eq!(frame.raw_best_vowel, -1);
 
         lipsync_destroy(analyzer);
     }
 
+    #[test]
+    fn lipsync_c_abi_extracts_training_features() {
+        let pcm = vec![0.02; 1024];
+        let options = LipSyncOptions {
+            sample_rate: 16_000,
+            flags: LIPSYNC_FLAG_ROBUST_LOUDNESS,
+            metadata_weight: 0.0,
+            smoothing: 0.18,
+            loudness_adaptation: 0.07,
+        };
+        let mut features = LipSyncTrainingFeatures::default();
+
+        assert!(lipsync_extract_training_features(
+            pcm.as_ptr(),
+            pcm.len(),
+            options,
+            &mut features
+        ));
+        assert_eq!(features.sample_rate, 16_000);
+        assert_eq!(
+            features.band_feature_space,
+            crate::vowel::LIPSYNC_FEATURE_SPACE_BANDS_16
+        );
+        assert_eq!(
+            features.feature_vector_space,
+            crate::vowel::LIPSYNC_FEATURE_SPACE_VECTOR_31
+        );
+        assert!(
+            features
+                .normalized_bands
+                .iter()
+                .all(|value| value.is_finite())
+        );
+        assert!(
+            features
+                .feature_vector
+                .iter()
+                .all(|value| value.is_finite())
+        );
+        assert!(!lipsync_extract_training_features(
+            std::ptr::null(),
+            pcm.len(),
+            options,
+            &mut features
+        ));
+    }
     #[test]
     fn lipsync_c_abi_applies_timed_cues_at_time() {
         let analyzer = lipsync_create_with_options(LipSyncOptions {

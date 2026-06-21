@@ -82,6 +82,12 @@ class SummaryMathTests(unittest.TestCase):
         self.assertAlmostEqual(summary["average_jaw_open"], 0.35)
 
 
+class FeatureColumnTests(unittest.TestCase):
+    def test_feature_column_dimensions_are_stable(self):
+        self.assertEqual(evaluate_dataset.NUM_BANDS, 16)
+        self.assertEqual(evaluate_dataset.FEATURE_VECTOR_LEN, 31)
+
+
 class OptionFlagTests(unittest.TestCase):
     def parse(self, *extra_args):
         return evaluate_dataset.parse_args(

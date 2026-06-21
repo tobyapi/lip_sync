@@ -23,6 +23,8 @@ import wave
 
 CLASS_NAMES = ["REST", "CLOSED", "A", "I", "U", "E", "O", "FRICATIVE", "OTHER"]
 VOWEL_NAMES = ["A", "I", "U", "E", "O"]
+NUM_BANDS = 16
+FEATURE_VECTOR_LEN = 31
 CLASS_TO_INDEX = {name: index for index, name in enumerate(CLASS_NAMES)}
 VOWEL_CLASSES = {"A", "I", "U", "E", "O"}
 NON_VOWEL_DIR_LABELS = {
@@ -83,6 +85,11 @@ class LipSyncDebugFrame(ctypes.Structure):
     _fields_ = [
         ("frame", LipSyncFrame),
         ("vowel_scores", ctypes.c_float * len(VOWEL_NAMES)),
+        ("normalized_bands", ctypes.c_float * NUM_BANDS),
+        ("feature_vector", ctypes.c_float * FEATURE_VECTOR_LEN),
+        ("classifier_kind", ctypes.c_uint32),
+        ("band_feature_space", ctypes.c_uint32),
+        ("feature_vector_space", ctypes.c_uint32),
         ("activity", ctypes.c_float),
         ("rms", ctypes.c_float),
         ("high_ratio", ctypes.c_float),
@@ -282,6 +289,8 @@ def process_file(library, path: Path, label: str, args: argparse.Namespace) -> l
             frame = debug.frame
             posterior = [float(frame.posterior[index]) for index in range(len(CLASS_NAMES))]
             vowel_scores = [float(debug.vowel_scores[index]) for index in range(len(VOWEL_NAMES))]
+            band_features = [float(debug.normalized_bands[index]) for index in range(NUM_BANDS)]
+            feature_vector = [float(debug.feature_vector[index]) for index in range(FEATURE_VECTOR_LEN)]
             time_seconds = start / sample_rate
             rows.append(
                 {
@@ -297,6 +306,11 @@ def process_file(library, path: Path, label: str, args: argparse.Namespace) -> l
                     "f2_hz": float(frame.f2_hz),
                     "posterior": posterior,
                     "vowel_scores": vowel_scores,
+                    "band_features": band_features,
+                    "feature_vector": feature_vector,
+                    "classifier_kind": int(debug.classifier_kind),
+                    "band_feature_space": int(debug.band_feature_space),
+                    "feature_vector_space": int(debug.feature_vector_space),
                     "activity": float(debug.activity),
                     "rms": float(debug.rms),
                     "high_ratio": float(debug.high_ratio),
@@ -386,8 +400,13 @@ def write_outputs(rows: list[dict[str, object]], summary: dict[str, object], out
         "f1_hz",
         "f2_hz",
         "entropy",
+        "classifier_kind",
+        "band_feature_space",
+        "feature_vector_space",
     ] + [f"p_{name.lower()}" for name in CLASS_NAMES] + [
         f"vowel_scores_{name.lower()}" for name in VOWEL_NAMES
+    ] + [f"band_{index:02d}" for index in range(NUM_BANDS)] + [
+        f"feature_{index:02d}" for index in range(FEATURE_VECTOR_LEN)
     ] + [
         "activity",
         "rms",
@@ -406,6 +425,10 @@ def write_outputs(rows: list[dict[str, object]], summary: dict[str, object], out
                 output[f"p_{name.lower()}"] = value
             for name, value in zip(VOWEL_NAMES, row["vowel_scores"]):
                 output[f"vowel_scores_{name.lower()}"] = value
+            for index, value in enumerate(row["band_features"]):
+                output[f"band_{index:02d}"] = value
+            for index, value in enumerate(row["feature_vector"]):
+                output[f"feature_{index:02d}"] = value
             writer.writerow(output)
 
     with (out_dir / "summary.json").open("w", encoding="utf-8") as handle:

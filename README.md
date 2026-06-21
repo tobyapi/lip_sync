@@ -141,11 +141,11 @@ python3 scripts/evaluate_dataset.py \
   --out target/lipsync_eval
 ```
 
-The evaluator reads mono or stereo PCM WAV files, downmixes to mono, runs the debug C ABI with configurable chunks, and writes `frames.csv`, `summary.json`, and `confusion_matrix.csv`. The per-frame CSV includes final posterior columns `p_rest` through `p_other`, raw vowel scores `vowel_scores_a` through `vowel_scores_o`, `vowel_confidence`, `activity`, `rms`, `high_ratio`, `zcr`, `flatness`, `compression_likelihood`, and `raw_best_vowel`. The summary includes vowel top-1/top-2 accuracy, rest rejection, fricative and closed detection when labels exist, average jaw opening, class switches per second, and mean posterior entropy. The optional `--gmm` flag is available only for placeholder infrastructure experiments; it is not an accuracy-improvement mode and should not be included in accuracy claims until a trained model replaces it.
+The evaluator reads mono or stereo PCM WAV files, downmixes to mono, runs the debug C ABI with configurable chunks, and writes `frames.csv`, `summary.json`, and `confusion_matrix.csv`. The per-frame CSV includes final posterior columns `p_rest` through `p_other`, raw vowel scores `vowel_scores_a` through `vowel_scores_o`, `band_00` through `band_15`, `feature_00` through `feature_30`, feature-space ids, `vowel_confidence`, `activity`, `rms`, `high_ratio`, `zcr`, `flatness`, `compression_likelihood`, and `raw_best_vowel`. The summary includes vowel top-1/top-2 accuracy, rest rejection, fricative and closed detection when labels exist, average jaw opening, class switches per second, and mean posterior entropy. The optional `--gmm` flag is available only for placeholder infrastructure experiments; it is not an accuracy-improvement mode and should not be included in accuracy claims until a trained model replaces it.
 
 ## Feature Extractor
 
-The crate includes a `FeatureExtractor` for future trained-model export and offline experiments. It produces:
+The crate includes a `FeatureExtractor` and training CSV export for trained-model experiments. The debug C ABI exposes the current 16-band classifier space and the 31-dimensional feature vector separately. `scripts/export_training_csv.py` writes `label`, `file`, `time_seconds`, `eval_frame`, `band_*`, and `feature_*` columns; `scripts/train_gmm.py --feature-set band` trains from the 16-band space while the default `feature_` prefix trains from the 31-dimensional vector. The feature extractor produces:
 
 - 24 mel-like log band energies internally.
 - MFCC 1..12, excluding MFCC 0 from vowel-shape classification.

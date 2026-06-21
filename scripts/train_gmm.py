@@ -23,12 +23,19 @@ def parse_args(argv):
     parser.add_argument("--out", required=True, type=Path, help="JSON output path")
     parser.add_argument("--label-column", default="label", help="Class label column")
     parser.add_argument("--feature-prefix", default="feature_", help="Prefix for feature columns")
+    parser.add_argument("--feature-set", choices=["feature", "band"], help="Use feature_00.. or band_00.. columns from export_training_csv.py")
+    parser.add_argument("--evaluated-only", action="store_true", help="Use only rows whose eval_frame column is true")
     parser.add_argument("--mixtures", type=int, default=1, help="Mixtures per class")
     parser.add_argument("--variance-floor", type=float, default=1.0e-4, help="Minimum diagonal variance")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.feature_set == "feature":
+        args.feature_prefix = "feature_"
+    elif args.feature_set == "band":
+        args.feature_prefix = "band_"
+    return args
 
 
-def read_rows(path, label_column, feature_prefix):
+def read_rows(path, label_column, feature_prefix, evaluated_only=False):
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         feature_columns = [name for name in reader.fieldnames or [] if name.startswith(feature_prefix)]
@@ -36,6 +43,8 @@ def read_rows(path, label_column, feature_prefix):
             raise ValueError(f"no feature columns with prefix {feature_prefix!r}")
         groups = {}
         for row in reader:
+            if evaluated_only and str(row.get("eval_frame", "")).strip().lower() not in {"1", "true", "yes"}:
+                continue
             label = row.get(label_column, "").strip()
             if not label:
                 continue
@@ -88,9 +97,10 @@ def main(argv):
         args = parse_args(argv)
         if args.mixtures < 1:
             raise ValueError("mixtures must be at least 1")
-        feature_columns, groups = read_rows(args.input, args.label_column, args.feature_prefix)
+        feature_columns, groups = read_rows(args.input, args.label_column, args.feature_prefix, args.evaluated_only)
         model = train(groups, args.mixtures, args.variance_floor)
         model["feature_columns"] = feature_columns
+        model["feature_prefix"] = args.feature_prefix
         args.out.parent.mkdir(parents=True, exist_ok=True)
         with args.out.open("w", encoding="utf-8") as handle:
             json.dump(model, handle, indent=2, sort_keys=True)
