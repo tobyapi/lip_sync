@@ -445,6 +445,7 @@ pub struct LipSyncAnalyzer {
     feature_extractor: FeatureExtractor,
     cmvn: RollingCmvn,
     rolling_loudness: RollingLoudness,
+    closed_detector: ClosedDetector,
     current_class: LipSyncClass,
     hold_time_seconds: f32,
     previous_time_step_seconds: f32,
@@ -477,6 +478,7 @@ impl LipSyncAnalyzer {
             feature_extractor: FeatureExtractor::new(),
             cmvn: RollingCmvn::default(),
             rolling_loudness: RollingLoudness::new(),
+            closed_detector: ClosedDetector::new(ClosedDetectionMode::UltraLowLatency),
             current_class: LipSyncClass::Rest,
             hold_time_seconds: 0.0,
             previous_time_step_seconds: 0.0,
@@ -552,10 +554,14 @@ impl LipSyncAnalyzer {
         }
 
         let openness = vowel_openness(evidence.scores);
-        let closed_score = ((1.0 - evidence.confidence) * (1.0 - openness) * 0.45 * activity)
-            .clamp(0.0, 0.55)
-            * (1.0 - rest_score)
-            * (1.0 - fricative_score);
+        let closed_score = self.closed_detector.score(
+            &profile,
+            &evidence,
+            openness,
+            rest_score,
+            fricative_score,
+            activity,
+        );
         let vowel_mass =
             (evidence.confidence * (1.0 - rest_score) * (1.0 - fricative_score) * activity)
                 .clamp(0.0, 1.0);
@@ -738,6 +744,88 @@ impl LipSyncAnalyzer {
             posterior[index] = posterior[index] * (1.0 - blend) + cue_distribution[index] * blend;
         }
         normalize_distribution(posterior);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClosedDetectionMode {
+    UltraLowLatency,
+    QualityLookahead,
+}
+
+#[derive(Debug, Clone)]
+struct ClosedDetector {
+    mode: ClosedDetectionMode,
+    previous_rms: f32,
+    previous_valley: f32,
+}
+
+impl ClosedDetector {
+    fn new(mode: ClosedDetectionMode) -> Self {
+        Self {
+            mode,
+            previous_rms: 0.0,
+            previous_valley: 0.0,
+        }
+    }
+
+    fn score(
+        &mut self,
+        profile: &SpectralProfile,
+        evidence: &VowelEvidence,
+        openness: f32,
+        rest_score: f32,
+        fricative_score: f32,
+        activity: f32,
+    ) -> f32 {
+        if profile.rms <= SILENCE_RMS * 3.0 || rest_score > 0.72 {
+            self.update(profile, 0.0);
+            return 0.0;
+        }
+
+        let low_openness = (1.0 - openness).clamp(0.0, 1.0);
+        let low_high_ratio = (1.0 - (profile.high_ratio / 0.35).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+        let compact_spectrum = (1.0 - profile.spectral_flatness).clamp(0.0, 1.0);
+        let energy_valley = self.energy_valley(profile.rms);
+        let following_onset = self.following_onset(profile.rms);
+        let weak_confidence_hint = (1.0 - evidence.confidence).clamp(0.0, 1.0) * 0.08;
+        let lookahead_bonus = if self.mode == ClosedDetectionMode::QualityLookahead {
+            (self.previous_valley * following_onset * 0.35).clamp(0.0, 0.35)
+        } else {
+            0.0
+        };
+
+        let evidence_score = 0.30 * energy_valley
+            + 0.22 * low_high_ratio
+            + 0.18 * low_openness
+            + 0.12 * compact_spectrum
+            + 0.10 * following_onset
+            + weak_confidence_hint
+            + lookahead_bonus;
+        let score = (evidence_score * activity).clamp(0.0, 0.65)
+            * (1.0 - rest_score)
+            * (1.0 - fricative_score * 0.85);
+        self.update(profile, energy_valley);
+        score.clamp(0.0, 0.65)
+    }
+
+    fn energy_valley(&self, rms: f32) -> f32 {
+        if self.previous_rms <= SILENCE_RMS * 4.0 {
+            return 0.0;
+        }
+        ((self.previous_rms * 0.65 - rms) / (self.previous_rms * 0.65 + EPSILON)).clamp(0.0, 1.0)
+    }
+
+    fn following_onset(&self, rms: f32) -> f32 {
+        if self.previous_rms <= SILENCE_RMS * 2.0 {
+            return 0.0;
+        }
+        ((rms - self.previous_rms * 1.35) / (self.previous_rms * 1.35 + EPSILON)).clamp(0.0, 1.0)
+    }
+
+    fn update(&mut self, profile: &SpectralProfile, energy_valley: f32) {
+        self.previous_rms = profile.rms;
+        self.previous_valley = energy_valley;
     }
 }
 
@@ -1647,6 +1735,14 @@ mod tests {
     }
 
     #[test]
+    fn silence_is_rest_not_closed() {
+        let mut analyzer = LipSyncAnalyzer::new(SAMPLE_RATE, false);
+        let frame = analyzer.process(&vec![0.0; FRAME_SIZE]);
+        assert!(frame.posterior[LipSyncClass::Rest as usize] > 0.9);
+        assert!(frame.posterior[LipSyncClass::Closed as usize] < 0.05);
+    }
+
+    #[test]
     fn high_frequency_noise_prefers_fricative_over_vowels() {
         let mut analyzer = LipSyncAnalyzer::new(SAMPLE_RATE, false);
         let noise = synthetic_high_frequency_noise(0.35);
@@ -1656,6 +1752,50 @@ mod tests {
             .copied()
             .fold(0.0, f32::max);
         assert!(frame.posterior[LipSyncClass::Fricative as usize] > best_vowel);
+        assert!(
+            frame.posterior[LipSyncClass::Fricative as usize]
+                > frame.posterior[LipSyncClass::Closed as usize]
+        );
+    }
+
+    #[test]
+    fn energy_valley_followed_by_onset_boosts_closed_in_quality_mode() {
+        let evidence = VowelEvidence {
+            scores: [0.16, 0.24, 0.30, 0.16, 0.14],
+            confidence: 0.25,
+            f1_hz: 0.0,
+            f2_hz: 0.0,
+        };
+        let first = synthetic_closed_profile(0.16, 0.18, 0.08, 0.08);
+        let valley = synthetic_closed_profile(0.025, 0.03, 0.06, 0.05);
+        let onset = synthetic_closed_profile(0.15, 0.20, 0.08, 0.10);
+
+        let mut ultra = ClosedDetector::new(ClosedDetectionMode::UltraLowLatency);
+        ultra.score(&first, &evidence, 0.25, 0.05, 0.02, 1.0);
+        ultra.score(&valley, &evidence, 0.20, 0.05, 0.02, 1.0);
+        let ultra_onset = ultra.score(&onset, &evidence, 0.20, 0.05, 0.02, 1.0);
+
+        let mut quality = ClosedDetector::new(ClosedDetectionMode::QualityLookahead);
+        quality.score(&first, &evidence, 0.25, 0.05, 0.02, 1.0);
+        quality.score(&valley, &evidence, 0.20, 0.05, 0.02, 1.0);
+        let quality_onset = quality.score(&onset, &evidence, 0.20, 0.05, 0.02, 1.0);
+
+        assert!(
+            quality_onset > ultra_onset,
+            "quality={quality_onset} ultra={ultra_onset}"
+        );
+    }
+
+    #[test]
+    fn sustained_low_openness_vowel_does_not_become_closed() {
+        let mut analyzer = LipSyncAnalyzer::new(SAMPLE_RATE, false);
+        let u_like = synthetic_vowel_like_signal(0.45, &[(100.0, 0.7), (260.0, 1.0), (460.0, 0.8)]);
+        let frame = analyzer.process(&u_like);
+        let best_vowel = frame.posterior[LipSyncClass::A as usize..=LipSyncClass::O as usize]
+            .iter()
+            .copied()
+            .fold(0.0, f32::max);
+        assert!(best_vowel > frame.posterior[LipSyncClass::Closed as usize]);
     }
 
     #[test]
@@ -1815,6 +1955,23 @@ mod tests {
         posterior[LipSyncClass::Other as usize] = (1.0 - current_score - candidate_score).max(0.0);
         normalize_distribution(&mut posterior);
         posterior
+    }
+
+    fn synthetic_closed_profile(
+        rms: f32,
+        peak: f32,
+        high_ratio: f32,
+        spectral_flatness: f32,
+    ) -> SpectralProfile {
+        SpectralProfile {
+            rms,
+            peak,
+            normalized_bands: [0.0; NUM_BANDS],
+            high_ratio,
+            zero_crossing_rate: 0.02,
+            spectral_flatness,
+            compression_likelihood: 0.0,
+        }
     }
 
     fn synthetic_vowel_like_signal(amplitude: f32, partials: &[(f32, f32)]) -> Vec<f32> {

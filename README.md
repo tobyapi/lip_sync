@@ -140,6 +140,9 @@ The stateful analyzer owns a `FeatureExtractor` for richer classifier paths. It 
 - `rms_db` for loudness and jaw behavior.
 
 GMM mode consumes the richer `FeatureVector.values`. The fixed tiny NN still uses the legacy 16-band shape today, but the feature extractor is the intended input surface for future tiny-model training/export.
+## Closed Detection
+
+CLOSED uses a dedicated low-latency heuristic detector instead of treating every low-confidence vowel as closed. The detector uses short energy valleys, low high-frequency ratio, compact spectral shape, low jaw-openness target, and nearby onset evidence. The default mode is causal and conservative. An internal quality/lookahead mode can boost CLOSED when a 20-30 ms style valley-plus-following-onset pattern is available, but perfect p/b/m detection is impossible from audio-only causal frames.
 ## Temporal State
 
 `LipSyncAnalyzer` applies a lightweight temporal state machine after posterior scoring. It tracks the current class, hold time, previous time step, and switch confidence. Class-specific minimum holds and hysteresis reduce flicker while still allowing quick CLOSED and FRICATIVE attacks. Singing mode increases vowel-to-vowel hold time and switch margin, so sustained vocals move more slowly than normal speech.
